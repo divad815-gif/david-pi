@@ -3,6 +3,6 @@ gunicorn==23.0.0
 Pillow==11.3.0
 pillow-heif==1.1.0
 qrcode[pil]==8.2
-cryptography==45.0.7
+cryptography==50.0.0
 pywebpush==2.0.3
 google-auth==2.40.3
