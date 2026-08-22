@@ -88,18 +88,6 @@ jobs:
             dist/install.sh
             dist/release-manifest.txt
           generate_release_notes: true
-      - name: Make GHCR package public
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          owner="${GITHUB_REPOSITORY%%/*}"
-          package="${GITHUB_REPOSITORY##*/}"
-          owner_type="$(gh api "repos/$GITHUB_REPOSITORY" --jq .owner.type)"
-          if [[ "$owner_type" == User ]]; then
-            gh api --method PATCH "/user/packages/container/$package" -f visibility=public
-          else
-            gh api --method PATCH "/orgs/$owner/packages/container/$package" -f visibility=public
-          fi
       - name: Verify anonymous release and image access
         env:
           IMAGE_DIGEST: ${{ steps.build.outputs.digest }}

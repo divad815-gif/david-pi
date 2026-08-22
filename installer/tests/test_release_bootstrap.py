@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def build_fake_release(tmp_path: Path, *, corrupt_checksum: bool = False) -> tuple[Path, dict[str, str]]:
-    version = "9.22.0"
+    version = "9.22.1"
     release_root = tmp_path / f"david-pi-{version}"
     release_root.mkdir()
     (release_root / "VERSION").write_text(version + "\n", encoding="utf-8")
@@ -57,7 +57,7 @@ def test_bootstrap_verifies_archive_before_setup(tmp_path: Path):
         ["bash", str(ROOT / "install.sh")], env=env, text=True, capture_output=True, check=False
     )
     assert result.returncode == 0, result.stderr
-    assert "Release verified: 9.22.0" in result.stdout
+    assert "Release verified: 9.22.1" in result.stdout
     assert "Verification-only mode complete" in result.stdout
 
 
