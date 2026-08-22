@@ -1,0 +1,179 @@
+services:
+  photo-portal:
+    image: ${DAVID_PI_IMAGE:-david-pi:9.22.0}
+    container_name: family-photo-portal
+    restart: "no"
+    ports:
+      - "127.0.0.1:8090:8000"
+    volumes:
+      - type: bind
+        source: /srv/data/family-photos
+        target: /data
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /run/david-pi
+        target: /run/david-pi
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /run/david-pi-windows
+        target: /run/david-pi-windows
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /srv/compose/photo-portal/secrets/chat-master.key
+        target: /run/secrets/chat-master.key
+        read_only: true
+        bind:
+          create_host_path: false
+    environment:
+      DAVID_PI_PLATFORM_DATA: /data/platform
+      DAVID_PI_INSTANCE_NAME: ${DAVID_PI_INSTANCE_NAME:-David-Pi}
+      DAVID_PI_PLATFORM_PROFILE: ${DAVID_PI_PLATFORM_PROFILE:-linux-server}
+      TMDB_API_READ_TOKEN: ${TMDB_API_READ_TOKEN:-}
+      MOVIE_REGION: ${MOVIE_REGION:-US}
+      DAVID_PI_FILES_DATA: /data/files
+      DAVID_PI_AUDIOBOOKS_DATA: /data/audiobooks
+      DAVID_PI_DATA_SENTINEL: /data/.david-pi-storage
+      DAVID_PI_DATA_ID: david-pi-family-storage-v1
+      PIHOLE_SUMMARY: /run/david-pi/pihole-summary.json
+      DAVID_PI_BACKUP_STATUS: /run/david-pi/backup-status.json
+      DAVID_PI_SERVER_STATUS: /run/david-pi/server-status.json
+      DAVID_PI_ASSISTANT_DATA: /data/platform/assistant
+      DAVID_PI_WINDOWS_SOCKET: /run/david-pi-windows/windows-broker.sock
+      DAVID_PI_CHAT_DATA: /data/chat
+      DAVID_PI_CHAT_KEY_FILE: /run/secrets/chat-master.key
+      DAVID_PI_VAPID_PUBLIC_KEY: ${DAVID_PI_VAPID_PUBLIC_KEY:-}
+      DAVID_PI_VAPID_PRIVATE_KEY_FILE: ${DAVID_PI_VAPID_PRIVATE_KEY_FILE:-}
+      DAVID_PI_FCM_CREDENTIAL_FILE: ${DAVID_PI_FCM_CREDENTIAL_FILE:-}
+      IOS_SHORTCUT_ICLOUD_URL: ${IOS_SHORTCUT_ICLOUD_URL:-}
+      DAVID_PI_PUBLIC_URL: ${DAVID_PI_PUBLIC_URL:-https://localhost}
+      DAVID_PI_ALLOWED_HOSTS: ${DAVID_PI_ALLOWED_HOSTS:-127.0.0.1,localhost}
+      GIPHY_API_KEY: ${GIPHY_API_KEY:-}
+      ASSISTANT_WINDOWS_ENABLED: ${ASSISTANT_WINDOWS_ENABLED:-true}
+      ASSISTANT_UBUNTU_BROKER_ENABLED: "false"
+      ASSISTANT_UBUNTU_CHAT_ENABLED: "false"
+      ASSISTANT_UBUNTU_AGENT_ENABLED: "false"
+      ASSISTANT_UBUNTU_AGENT_BACKEND: opencode
+      ASSISTANT_OPENCODE_ENABLED: "false"
+      ASSISTANT_CODEX_ENABLED: "false"
+      DAVID_PI_BACKUP_GLOBAL_UPLOADS: ${DAVID_PI_BACKUP_GLOBAL_UPLOADS:-1}
+      DAVID_PI_BACKUP_CHUNK_MAX: ${DAVID_PI_BACKUP_CHUNK_MAX:-8388608}
+      DAVID_PI_BACKUP_MIN_FREE: ${DAVID_PI_BACKUP_MIN_FREE:-1073741824}
+      DAVID_PI_SECONDARY_BACKUP_ROOT: ${DAVID_PI_SECONDARY_BACKUP_ROOT:-}
+      DAVID_PI_SECONDARY_DATA_ID: ${DAVID_PI_SECONDARY_DATA_ID:-}
+      DAVID_PI_SHUTDOWN_PASSWORD_HASH_B64: ${DAVID_PI_SHUTDOWN_PASSWORD_HASH_B64:-}
+      TMPDIR: /data/tmp/uploads
+    mem_limit: ${DAVID_PI_PORTAL_MEMORY:-1536m}
+    memswap_limit: ${DAVID_PI_PORTAL_MEMORY:-1536m}
+    pids_limit: ${DAVID_PI_PORTAL_PIDS:-256}
+    cpus: ${DAVID_PI_PORTAL_CPUS:-3.0}
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+      - /run:size=16m,mode=0755
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).read()"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: local
+      options:
+        max-size: 10m
+        max-file: "3"
+    stop_grace_period: 30s
+  chat-notifier:
+    image: ${DAVID_PI_IMAGE:-david-pi:9.22.0}
+    container_name: david-pi-chat-notifier
+    restart: unless-stopped
+    command: ["python", "-m", "modules.chat_notify_worker"]
+    volumes:
+      - type: bind
+        source: /srv/data/family-photos
+        target: /data
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /srv/compose/photo-portal/secrets/chat-vapid-private.pem
+        target: /run/secrets/chat-vapid-private.pem
+        read_only: true
+        bind:
+          create_host_path: false
+    environment:
+      DAVID_PI_PLATFORM_DATA: /data/platform
+      DAVID_PI_DATA_SENTINEL: /data/.david-pi-storage
+      DAVID_PI_DATA_ID: david-pi-family-storage-v1
+      DAVID_PI_VAPID_PRIVATE_KEY_FILE: /run/secrets/chat-vapid-private.pem
+      DAVID_PI_VAPID_SUBJECT: ${DAVID_PI_PUBLIC_URL:-https://localhost}
+      DAVID_PI_FCM_CREDENTIAL_FILE: ${DAVID_PI_FCM_CREDENTIAL_FILE:-}
+    mem_limit: 128m
+    memswap_limit: 128m
+    pids_limit: 64
+    cpus: 0.25
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp:size=8m,mode=1777
+      - /run:size=8m,mode=0755
+    logging:
+      driver: local
+      options:
+        max-size: 5m
+        max-file: "2"
+    stop_grace_period: 10s
+  audiobook-preparer:
+    image: ${DAVID_PI_IMAGE:-david-pi:9.22.0}
+    container_name: david-pi-audiobook-preparer
+    restart: unless-stopped
+    command: ["python", "-m", "modules.audiobook_prepare_worker"]
+    volumes:
+      - type: bind
+        source: /srv/data/family-photos/audiobooks
+        target: /data/audiobooks
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /srv/data/family-photos/.david-pi-storage
+        target: /run/david-pi-storage-sentinel
+        read_only: true
+        bind:
+          create_host_path: false
+    environment:
+      DAVID_PI_WORKER_MODE: audiobook
+      DAVID_PI_AUDIOBOOKS_DATA: /data/audiobooks
+      DAVID_PI_DATA_SENTINEL: /run/david-pi-storage-sentinel
+      DAVID_PI_DATA_ID: david-pi-family-storage-v1
+      DAVID_PI_AUDIOBOOK_SEGMENT_SECONDS: "20"
+      DAVID_PI_AUDIOBOOK_PREPARE_MIN_FREE: "107374182400"
+      DAVID_PI_AUDIOBOOK_PREPARE_MAX_TEMP: "75"
+      DAVID_PI_AUDIOBOOK_PREPARE_MAX_LOAD: "3.0"
+    mem_limit: 256m
+    memswap_limit: 256m
+    pids_limit: 64
+    cpus: 0.5
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+      - /run:size=8m,mode=0755
+    logging:
+      driver: local
+      options:
+        max-size: 5m
+        max-file: "2"
+    stop_grace_period: 30s

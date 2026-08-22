@@ -1,0 +1,14 @@
+{
+  "name": "David-Pi",
+  "short_name": "David-Pi",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#fffaf2",
+  "theme_color": "#fffaf2",
+  "scope": "/",
+  "description": "Photos, videos, files, and a friendly view of David-Pi",
+  "icons": [
+    {"src": "/david-pi-icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any"},
+    {"src": "/david-pi-icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any"}
+  ]
+}

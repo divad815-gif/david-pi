@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="csrf-token" content="{{ csrf_token }}"><meta name="theme-color" content="#fffaf2">
+  <title>Notes · David-Pi</title>
+  <link rel="stylesheet" href="/static/app.css?v=14"><link rel="stylesheet" href="/static/platform.css?v=16">
+</head>
+<body class="module-page notes-page">
+  <header class="module-bar"><a class="back" href="/" aria-label="Back home">&larr;</a><div><p>David-Pi</p><h1>Notes</h1></div></header>
+  <main class="module-shell">
+    <section class="module-intro notes-intro"><div><p class="sheet-kicker">Ideas, lists, reminders</p><h2>Keep it together.</h2></div><button class="round-primary" id="newNote" type="button">+ New</button></section>
+    <label class="module-search"><span aria-hidden="true">⌕</span><input id="noteSearch" type="search" placeholder="Search notes" autocomplete="off"></label>
+    {% if current_person.verified %}<p class="identity-note">Viewing as {{ current_person.name }}</p>{% endif %}
+    <nav class="chip-nav" id="noteViews" aria-label="Note views">
+      <button class="selected" data-view="all">All</button><button data-view="mine">Added by me</button><button data-view="pinned">Pinned</button><button data-view="archived">Archived</button><button data-view="deleted">Recently Deleted</button>
+    </nav>
+    <section class="note-grid" id="noteGrid" aria-live="polite"></section>
+    <section class="module-empty" id="notesEmpty" hidden><span aria-hidden="true">✎</span><h2>No notes yet.</h2><p>Save an idea, make a list, or leave something for each other.</p><button class="big-button" type="button" id="emptyNewNote">Create a note</button></section>
+  </main>
+
+  <dialog class="note-editor" id="noteEditor">
+    <header><button class="editor-back" id="closeNote" type="button" aria-label="Close note">&larr;</button><span id="saveState">Saved</span><button class="more-button" id="noteMenuButton" type="button">•••</button></header>
+    <div class="note-fields">
+      <input class="note-title" id="noteTitle" maxlength="200" placeholder="Title">
+      <div class="note-settings"><select id="noteVisibility" aria-label="Who can see this note"><option value="shared">Shared</option><option value="private">Only me</option></select><span class="shared-note-label" id="noteOwnerLabel"></span><select id="noteType" aria-label="Note type"><option value="text">Text</option><option value="checklist">Checklist</option></select></div>
+      <textarea id="noteBody" placeholder="Start writing…"></textarea>
+      <div class="checklist-editor" id="checklistEditor" hidden><div id="checklistItems"></div><button id="addChecklistItem" type="button">+ Add item</button></div>
+      <label class="tags-field">Tags<input id="noteTags" placeholder="Home, Ideas, Shopping"></label>
+    </div>
+    <div class="note-menu" id="noteMenu" hidden>
+      <button data-note-action="pin">Pin</button><button data-note-action="archive">Archive</button><button data-note-action="restore" hidden>Restore note</button><button class="danger-text" data-note-action="trash">Move to Recently Deleted</button>
+    </div>
+  </dialog>
+  <dialog class="confirm-sheet" id="noteConfirm"><h2 id="noteConfirmTitle">Delete this note?</h2><p id="noteConfirmText"></p><div class="confirm-actions"><button id="cancelNoteConfirm" type="button">Cancel</button><button class="danger-button" id="acceptNoteConfirm" type="button">Delete</button></div></dialog>
+  <div class="toast" id="platformToast" hidden role="status"></div>
+  <script src="/static/mobile-dialog-host.js?v=7" defer></script>
+  <script src="/static/notes.js?v=8" defer></script>
+</body>
+</html>

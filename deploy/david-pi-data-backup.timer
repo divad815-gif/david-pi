@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily David-Pi independent data snapshot
+
+[Timer]
+OnCalendar=*-*-* 04:15:00
+Persistent=true
+RandomizedDelaySec=15m
+Unit=david-pi-data-backup.service
+
+[Install]
+WantedBy=timers.target

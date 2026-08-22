@@ -1,0 +1,19 @@
+[Unit]
+Description=David-Pi independent data snapshot
+RequiresMountsFor=/srv/data /srv/backup-data
+After=docker.service srv-data.mount srv-backup\\x2ddata.mount
+ConditionPathIsMountPoint=/srv/data
+ConditionPathIsMountPoint=/srv/backup-data
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/david-pi-data-backup
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+TimeoutStartSec=6h
+PrivateTmp=true
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/srv/data/family-photos /srv/backup-data
+ReadOnlyPaths=/srv/compose/photo-portal /etc /usr/local/sbin

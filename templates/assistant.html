@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#fffaf2">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="David-Pi">
+  <title>Assistant · David-Pi</title>
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" type="image/png" sizes="32x32" href="/david-pi-icon-32.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="/david-pi-icon-180.png">
+  <link rel="stylesheet" href="/static/app.css?v=20">
+</head>
+<body class="assistant-page">
+  <header class="photo-bar assistant-bar">
+    <a class="back" href="/" aria-label="Back home">&larr;</a>
+    <div><p>David-Pi</p><h1>Assistant</h1></div>
+    <button class="assistant-history-button" id="historyButton" type="button">History</button>
+  </header>
+
+  <main class="assistant-shell">
+    <section class="assistant-intro" id="assistantIntro">
+      <span class="assistant-orb" aria-hidden="true"><i></i></span>
+      <h2>What would you like to know?</h2>
+      <p>I answer household and server questions directly. Other questions use the private Windows helper when that computer is awake.</p>
+      <div class="quick-questions" aria-label="Suggested questions">
+        <button type="button">How many photos do we have?</button>
+        <button type="button">How many collections are there?</button>
+        <button type="button">Is the server healthy?</button>
+        <button type="button">How much storage is available?</button>
+        <button type="button">What is the Pi temperature?</button>
+        <button type="button">How long has David-Pi been running?</button>
+        <button type="button">How much has Pi-hole blocked?</button>
+        <button type="button">Ask Windows: Explain how a VPN works simply.</button>
+        <button type="button">What can you help with?</button>
+      </div>
+    </section>
+
+    <section class="chat-log" id="chatLog" aria-live="polite" aria-label="Conversation"></section>
+  </main>
+
+  <dialog class="assistant-history" id="historyPanel">
+    <div class="assistant-history-heading">
+      <strong>Conversations</strong>
+      <button id="newConversation" type="button">+ New</button>
+      <button id="closeHistory" type="button" aria-label="Close history">&times;</button>
+    </div>
+    <div id="conversationList"></div>
+  </dialog>
+
+  <form class="chat-composer" id="assistantForm">
+    <label for="assistantInput">Ask David-Pi</label>
+    <div><textarea id="assistantInput" maxlength="2000" rows="1" placeholder="Ask David-Pi something&hellip;" required></textarea><button id="assistantSend" type="submit">Send</button></div>
+    <small id="providerStatus">Checking the assistant&hellip;</small>
+    <p id="assistantError" role="alert"></p>
+  </form>
+
+  <script src="/static/mobile-dialog-host.js?v=7" defer></script>
+  <script src="/static/assistant.js?v=5" defer></script>
+</body>
+</html>

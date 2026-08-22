@@ -1,0 +1,28 @@
+[Unit]
+Description=Publish sanitized David-Pi server status
+After=docker.service tailscaled.service srv-data.mount
+RequiresMountsFor=/srv/data
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/david-pi-server-status
+User=root
+Group=root
+UMask=0022
+RuntimeDirectory=david-pi
+RuntimeDirectoryMode=0755
+RuntimeDirectoryPreserve=yes
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadOnlyPaths=/srv/data /srv/backups /srv/compose /srv/appdata /proc /sys
+ReadWritePaths=/run/david-pi
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+TimeoutStartSec=90
+
+[Install]
+WantedBy=multi-user.target

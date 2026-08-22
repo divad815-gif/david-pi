@@ -1,0 +1,11 @@
+[Unit]
+Description=Refresh David-Pi Assistant diagnostics
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=2min
+AccuracySec=20s
+Persistent=true
+
+[Install]
+WantedBy=timers.target

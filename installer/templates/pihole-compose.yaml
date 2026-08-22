@@ -1,0 +1,37 @@
+services:
+  pihole:
+    image: pihole/pihole@sha256:f7d1be836e3bc608b56d82fc9904f5a831cdfbc0dc9c6d58f94e4c985c70038b
+    container_name: pihole
+    hostname: pihole
+    restart: "no"
+    ports:
+      - "53:53/tcp"
+      - "53:53/udp"
+      - "127.0.0.1:8081:80/tcp"
+    environment:
+      TZ: ${TZ}
+      FTLCONF_webserver_api_password: ${PIHOLE_PASSWORD}
+      FTLCONF_dns_listeningMode: ALL
+      FTLCONF_dns_upstreams: "1.1.1.1;1.0.0.1"
+    volumes:
+      - type: bind
+        source: /srv/data/pihole
+        target: /etc/pihole
+        bind:
+          create_host_path: false
+    cap_add:
+      - NET_ADMIN
+      - SYS_NICE
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "dig", "+short", "+tries=1", "+time=2", "pi.hole", "@127.0.0.1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 45s
+    logging:
+      driver: local
+      options:
+        max-size: 10m
+        max-file: "3"

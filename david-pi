@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+SELF="$(readlink -f "${BASH_SOURCE[0]}")"
+ROOT="$(cd "$(dirname "$SELF")" && pwd -P)"
+export DAVID_PI_CLI_ROOT="$ROOT"
+
+usage() {
+  cat <<'EOF'
+Usage: david-pi COMMAND
+
+Commands:
+  setup            Run or resume guided installation
+  preflight        Inspect compatibility without changing the host
+  prepare-storage  Explicitly prepare an unformatted data disk
+  status           Show a concise service and storage summary
+  verify           Verify security, storage, networking and selected features
+  update           Install a verified newer release without touching data
+  backup           Start source/database and configured data backups
+  restore-test     Verify a backup in an isolated temporary directory
+  repair           Reapply units/configuration and run verification
+  support-bundle   Create a sanitized diagnostic archive
+  uninstall-app    Remove application services; preserve all data
+EOF
+}
+
+command_name="${1:-}"
+shift || true
+
+case "$command_name" in
+  setup) source "$ROOT/installer/lib/setup.sh"; dp_setup "$@" ;;
+  preflight) source "$ROOT/installer/lib/preflight.sh"; dp_preflight "$@" ;;
+  prepare-storage) source "$ROOT/installer/lib/storage.sh"; dp_prepare_storage "$@" ;;
+  status) source "$ROOT/installer/lib/verify.sh"; dp_status "$@" ;;
+  verify) source "$ROOT/installer/lib/verify.sh"; dp_verify "$@" ;;
+  update) source "$ROOT/installer/lib/manage.sh"; dp_update "$@" ;;
+  backup) source "$ROOT/installer/lib/manage.sh"; dp_backup "$@" ;;
+  restore-test) source "$ROOT/installer/lib/manage.sh"; dp_restore_test "$@" ;;
+  repair) source "$ROOT/installer/lib/manage.sh"; dp_repair "$@" ;;
+  support-bundle) source "$ROOT/installer/lib/manage.sh"; dp_support_bundle "$@" ;;
+  uninstall-app) source "$ROOT/installer/lib/manage.sh"; dp_uninstall_app "$@" ;;
+  -h|--help|help|'') usage ;;
+  *) echo "Unknown command: $command_name" >&2; usage >&2; exit 2 ;;
+esac
+

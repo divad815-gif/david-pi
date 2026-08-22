@@ -1,0 +1,112 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  verify-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: sudo apt-get update && sudo apt-get install -y ffmpeg poppler-utils shellcheck rsync
+      - run: pip install -r requirements.txt pytest
+      - run: python scripts/check-public-release.py
+      - run: shellcheck -e SC1091,SC2034 david-pi install.sh installer/lib/*.sh scripts/*.sh deploy/*.sh
+      - run: bash -n david-pi install.sh installer/lib/*.sh scripts/*.sh deploy/*.sh
+      - run: pytest -q tests installer/tests
+      - run: docker compose config >/dev/null
+      - run: docker compose -f compose.yaml -f compose.dev.yaml config >/dev/null
+
+  verify-android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: android-actions/setup-android@v3
+      - working-directory: clients/android
+        run: ./gradlew testDebugUnitTest assembleDebug --no-daemon
+
+  release:
+    needs: [verify-linux, verify-android]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: sudo apt-get update && sudo apt-get install -y rsync
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Generate container metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=ref,event=tag
+            type=raw,value=latest
+      - name: Build and publish amd64/arm64 image
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+      - name: Build immutable release assets
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          DAVID_PI_IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          scripts/build-release.sh
+          scripts/build-release-metadata.sh
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.tar.gz
+            dist/*.sha256
+            dist/install.sh
+            dist/release-manifest.txt
+          generate_release_notes: true
+      - name: Make GHCR package public
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          owner="${GITHUB_REPOSITORY%%/*}"
+          package="${GITHUB_REPOSITORY##*/}"
+          owner_type="$(gh api "repos/$GITHUB_REPOSITORY" --jq .owner.type)"
+          if [[ "$owner_type" == User ]]; then
+            gh api --method PATCH "/user/packages/container/$package" -f visibility=public
+          else
+            gh api --method PATCH "/orgs/$owner/packages/container/$package" -f visibility=public
+          fi
+      - name: Verify anonymous release and image access
+        env:
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          base="https://github.com/$GITHUB_REPOSITORY/releases/download/${GITHUB_REF_NAME}"
+          curl -fsSL "$base/install.sh" -o /tmp/install.sh
+          curl -fsSL "$base/install.sh.sha256" -o /tmp/install.sh.sha256
+          (cd /tmp && sha256sum -c install.sh.sha256)
+          docker logout ghcr.io || true
+          docker pull "ghcr.io/${GITHUB_REPOSITORY,,}@$IMAGE_DIGEST"

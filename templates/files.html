@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="csrf-token" content="{{ csrf_token }}">
+  <meta name="theme-color" content="#fffaf2">
+  <title>Files · David-Pi</title>
+  <link rel="stylesheet" href="/static/app.css?v=14">
+  <link rel="stylesheet" href="/static/platform.css?v=16">
+</head>
+<body class="module-page">
+  <header class="module-bar">
+    <a class="back" href="/" aria-label="Back home">&larr;</a>
+    <div><p>David-Pi</p><h1>Files</h1></div>
+    <button class="round-primary compact-primary" id="openUpload">+ Add</button>
+  </header>
+  <main class="module-shell files-shell">
+    <section class="module-intro files-intro">
+      <div><p class="sheet-kicker">Saved at home</p><h2>Your files</h2><p>Documents and personal storage, without leaving David-Pi.</p></div>
+      <button id="newFolder">New folder</button>
+    </section>
+    <nav class="file-breadcrumbs" id="fileBreadcrumbs" aria-label="Folder path"></nav>
+    <label class="module-search"><span>&#8981;</span><input id="fileSearch" type="search" placeholder="Search this folder"></label>
+    {% if current_person.verified %}<p class="identity-note">Viewing as {{ current_person.name }}</p>{% endif %}
+    <nav class="chip-nav" id="fileOwners" aria-label="File ownership">
+      <button class="selected" data-owner="">All</button><button data-owner="mine">Added by me</button>
+    </nav>
+    <nav class="chip-nav" id="fileKinds">
+      <button class="selected" data-kind="">All</button><button data-kind="pdf">PDFs</button>
+      <button data-kind="document">Documents</button><button data-kind="image">Images</button>
+      <button data-kind="text">Text</button><button data-kind="video">Video</button>
+      <button data-kind="audio">Audio</button><button data-view="deleted">Recently Deleted</button>
+    </nav>
+    <section class="file-grid" id="fileGrid"></section>
+    <section class="module-empty" id="filesEmpty" hidden>
+      <span>&#8962;</span><h2>Nothing here yet.</h2><p>Upload a document, photo, PDF, or anything else you want to keep.</p>
+      <button class="big-button" id="emptyAddFile">Add files</button>
+    </section>
+  </main>
+
+  <dialog class="small-sheet file-upload-sheet" id="uploadSheet">
+    <button class="close" id="closeUpload">&times;</button><p class="sheet-kicker">Bring files home</p><h2>Add files</h2>
+    <label class="file-drop" id="fileDrop"><input id="fileInput" type="file" multiple><span class="file-drop-plus" aria-hidden="true">+</span><strong>Choose files</strong><span>Several at once is fine</span></label>
+    <label class="text-field">Who can see these files?<select id="fileVisibility"><option value="shared">Shared</option><option value="private">Only me</option></select></label>
+    <div class="selected-files" id="selectedFiles"></div>
+    <button class="big-button" id="startFileUpload">Upload files</button><p class="upload-message" id="uploadMessage"></p>
+  </dialog>
+  <dialog class="small-sheet" id="folderSheet">
+    <button class="close" id="closeFolder">&times;</button><p class="sheet-kicker">Keep things tidy</p><h2>New folder</h2>
+    <label class="text-field">Folder name<input id="folderName" maxlength="120" autocomplete="off"></label>
+    <div class="dialog-actions"><button class="dialog-cancel" id="cancelFolder">Cancel</button><button class="big-button" id="createFolder">Create folder</button></div>
+    <p class="upload-message" id="folderMessage"></p>
+  </dialog>
+  <dialog class="file-viewer" id="fileViewer">
+    <header><button id="closeFileViewer" aria-label="Close">&times;</button><strong id="viewerFileName"></strong><a id="viewerDownload" download>Download</a></header>
+    <div class="file-preview" id="filePreview"></div>
+  </dialog>
+  <dialog class="confirm-sheet" id="fileConfirm">
+    <h2 id="fileConfirmTitle">Move this file?</h2><p id="fileConfirmCopy">You can restore it from Recently Deleted.</p>
+    <div class="confirm-actions"><button id="cancelFileAction">Cancel</button><button class="danger-button" id="acceptFileAction">Move to Recently Deleted</button></div>
+  </dialog>
+  <div class="toast" id="platformToast" hidden role="status"></div>
+  <script src="/static/mobile-dialog-host.js?v=7" defer></script>
+  <script src="/static/files.js?v=12" defer></script>
+</body>
+</html>

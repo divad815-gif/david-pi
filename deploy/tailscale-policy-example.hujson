@@ -1,0 +1,37 @@
+// EXAMPLE ONLY - replace every placeholder after checking your tailnet.
+// Do not apply this file as-is.
+{
+  "groups": {
+    "group:household": ["user:HOUSEHOLD_MEMBER_1", "user:HOUSEHOLD_MEMBER_2"],
+    "group:server-admin": ["user:ADMIN_ACCOUNT"]
+  },
+  "tagOwners": {
+    "tag:david-pi": ["group:server-admin"],
+    "tag:david-admin-device": ["group:server-admin"]
+  },
+  "grants": [
+    {
+      "src": ["group:household"],
+      "dst": ["tag:david-pi"],
+      "ip": ["tcp:443"]
+    },
+    {
+      "src": ["tag:david-admin-device"],
+      "dst": ["tag:david-pi"],
+      "ip": ["tcp:22", "tcp:8081"]
+    },
+    {
+      "src": ["group:household"],
+      "dst": ["tag:david-pi"],
+      "ip": ["udp:53", "tcp:53"]
+    }
+  ],
+  "ssh": [
+    {
+      "action": "check",
+      "src": ["tag:david-admin-device"],
+      "dst": ["tag:david-pi"],
+      "users": ["LINUX_ADMIN_USERNAME"]
+    }
+  ]
+}

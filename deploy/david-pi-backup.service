@@ -1,0 +1,15 @@
+[Unit]
+Description=Create David-Pi source and SQLite backup
+RequiresMountsFor=/srv/data
+ConditionPathIsMountPoint=/srv/data
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/david-pi-backup
+User=root
+Group=root
+UMask=0077
+NoNewPrivileges=true
+RuntimeDirectory=david-pi
+RuntimeDirectoryMode=0755
+RuntimeDirectoryPreserve=yes

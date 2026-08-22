@@ -1,0 +1,4 @@
+services:
+  photo-portal:
+    build:
+      context: .

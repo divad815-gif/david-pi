@@ -1,0 +1,19 @@
+[Unit]
+Description=David-Pi Pi-hole
+Requires=docker.service
+RequiresMountsFor=/srv/data
+After=docker.service srv-data.mount
+ConditionPathIsMountPoint=/srv/data
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/srv/compose/pihole
+ExecStart=/usr/bin/docker compose up -d
+ExecStartPost=/bin/sh -c 'timeout 180 sh -c '\''until docker inspect pihole --format "{{.State.Health.Status}}" 2>/dev/null | grep -qx healthy; do sleep 3; done'\'''
+ExecStop=/usr/bin/docker compose down
+TimeoutStartSec=240
+
+[Install]
+WantedBy=multi-user.target
+

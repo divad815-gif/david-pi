@@ -1,0 +1,13 @@
+[Unit]
+Description=Watch for a David-Pi safe shutdown request
+RequiresMountsFor=/srv/data
+After=local-fs.target
+ConditionPathIsMountPoint=/srv/data
+ConditionPathExists=/srv/data/family-photos/.david-pi-storage
+
+[Path]
+PathExists=/srv/data/family-photos/platform/control/shutdown.request
+Unit=david-pi-safe-shutdown.service
+
+[Install]
+WantedBy=multi-user.target

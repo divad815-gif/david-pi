@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="csrf-token" content="{{ csrf_token }}">
+  <meta name="theme-color" content="#fffaf2">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="David-Pi">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="apple-touch-icon" sizes="180x180" href="/david-pi-icon-180.png">
+  <title>Audiobooks · David-Pi</title>
+  <link rel="stylesheet" href="/static/app.css?v=15">
+  <link rel="stylesheet" href="/static/platform.css?v=16">
+  <link rel="stylesheet" href="/static/audiobook-shelf.css?v=3">
+</head>
+<body class="module-page audiobook-page">
+  <header class="module-bar">
+    <a class="back" href="/" aria-label="Back home">&larr;</a>
+    <div><p>David-Pi</p><h1>Audiobooks</h1></div>
+    <button class="round-primary compact-primary" id="openAudiobookUpload">+ Add</button>
+  </header>
+  <main class="module-shell audiobook-shell">
+    <section class="module-intro audiobook-intro">
+      <div><p class="sheet-kicker">Your listening shelf</p><h2>Stories, ready when you are.</h2><p>Keep DRM-free audiobooks at home and pick up where you left off.</p></div>
+    </section>
+    <label class="module-search"><span>&#8981;</span><input id="audiobookSearch" type="search" placeholder="Search titles, authors, or series"></label>
+    {% if current_person.verified %}<p class="identity-note">Listening as {{ current_person.name }}</p>{% endif %}
+    <nav class="chip-nav" id="audiobookViews" aria-label="Audiobook filters">
+      <button class="selected" data-owner="">Shared shelf</button>
+      <button data-owner="mine">Added by me</button>
+      <button data-view="deleted">Recently Deleted</button>
+    </nav>
+    <section class="audiobook-grid" id="audiobookGrid"></section>
+    <section class="module-empty" id="audiobooksEmpty" hidden>
+      <span aria-hidden="true">&#9835;</span><h2>Your shelf is waiting.</h2>
+      <p>Add a DRM-free MP3, M4B, M4A, AAC, OGG, Opus, FLAC, or WAV audiobook.</p>
+      <button class="big-button" id="emptyAddAudiobook">Add audiobooks</button>
+    </section>
+  </main>
+
+  <dialog class="small-sheet audiobook-upload-sheet" id="audiobookUploadSheet">
+    <button class="close" id="closeAudiobookUpload" aria-label="Close">&times;</button>
+    <p class="sheet-kicker">Bring a book home</p><h2>Add audiobooks</h2>
+    <label class="file-drop"><input id="audiobookInput" type="file" accept="audio/*,.m4b,.opus,.flac" multiple><span class="file-drop-plus" aria-hidden="true">+</span><strong>Choose full books</strong><span>Up to 20 DRM-free files at once</span></label>
+    <label class="text-field">Who can see these books?<select id="audiobookVisibility"><option value="shared">Shared</option><option value="private">Only me</option></select></label>
+    <div class="selected-files" id="selectedAudiobooks"></div>
+    <button class="big-button" id="startAudiobookUpload">Import audiobooks</button>
+    <p class="upload-message" id="audiobookUploadMessage"></p>
+  </dialog>
+
+  <dialog class="audiobook-player-sheet" id="audiobookPlayer">
+    <button class="audiobook-player-close" id="closeAudiobookPlayer" aria-label="Close">&times;</button>
+    <div class="audiobook-player-cover" id="playerCover"><span>&#9835;</span></div>
+    <p class="sheet-kicker" id="playerSeries">Now playing</p>
+    <h2 id="playerTitle"></h2><p class="audiobook-author" id="playerAuthor"></p>
+    <audio id="bookAudio" controls preload="metadata" playsinline></audio>
+    <div class="audiobook-skip-controls" aria-label="Playback shortcuts">
+      <button type="button" id="rewindAudiobook" aria-label="Go back 15 seconds">&#8634; 15 sec</button>
+      <button type="button" id="forwardAudiobook" aria-label="Skip ahead 30 seconds">30 sec &#8635;</button>
+    </div>
+    <div class="audiobook-player-tools">
+      <label>Speed<select id="playbackSpeed"><option value="0.75">0.75×</option><option value="1" selected>1×</option><option value="1.25">1.25×</option><option value="1.5">1.5×</option><option value="1.75">1.75×</option><option value="2">2×</option></select></label>
+      <label>Chapter<select id="chapterSelect"><option value="">Full book</option></select></label>
+      <label>Sleep<select id="sleepTimer"><option value="0">Off</option><option value="10">10 min</option><option value="20">20 min</option><option value="30">30 min</option><option value="45">45 min</option><option value="60">60 min</option></select></label>
+    </div>
+    <p class="audiobook-save-state" id="progressState">Progress saves automatically.</p>
+    <a class="backup-outline audiobook-download" id="downloadAudiobook" download>Download original</a>
+  </dialog>
+
+  <dialog class="small-sheet" id="editAudiobookSheet">
+    <button class="close" id="closeAudiobookEdit" aria-label="Close">&times;</button><p class="sheet-kicker">Book details</p><h2>Edit audiobook</h2>
+    <label class="text-field">Title<input id="editAudiobookTitle" maxlength="180"></label>
+    <label class="text-field">Author<input id="editAudiobookAuthor" maxlength="160"></label>
+    <label class="text-field">Visibility<select id="editAudiobookVisibility"><option value="shared">Shared</option><option value="private">Only me</option></select></label>
+    <div class="dialog-actions"><button class="dialog-cancel" id="cancelAudiobookEdit">Cancel</button><button class="big-button" id="saveAudiobookEdit">Save changes</button></div>
+  </dialog>
+  <div class="toast" id="platformToast" hidden role="status"></div>
+  <script src="/static/mobile-dialog-host.js?v=8" defer></script>
+  <script src="/static/vendor/hls/hls.min.js?v=1.6.16" defer></script>
+  <script src="/static/audiobooks.js?v=15" defer></script>
+</body>
+</html>

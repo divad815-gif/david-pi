@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#fffaf2">
+  <meta name="csrf-token" content="{{ csrf_token }}">
+  <title>Games · David-Pi</title>
+  <link rel="stylesheet" href="/static/app.css?v=13">
+  <link rel="stylesheet" href="/static/platform.css?v=16">
+  <link rel="stylesheet" href="/static/games.css?v=7">
+</head>
+<body class="module-page games-page">
+  <header class="module-bar"><a class="back" href="/" aria-label="Back home">&larr;</a><div><p>David-Pi</p><h1>Games</h1></div></header>
+  <main class="module-shell games-shell">
+    <section class="module-intro games-intro"><div><p class="sheet-kicker">A little downtime</p><h2>What should we play?</h2><p>No ads, accounts, or outside services.</p></div></section>
+    <nav class="game-picker" aria-label="Choose a game">
+      <button class="selected" type="button" data-game="sudoku"><span>⌗</span><strong>Sudoku</strong></button>
+      <button type="button" data-game="solitaire"><span>♠</span><strong>Solitaire</strong></button>
+      <button type="button" data-game="memory"><span>✦</span><strong>Memory</strong></button>
+      <button type="button" data-game="chess"><span>♞</span><strong>Chess</strong></button>
+      <button type="button" data-game="checkers"><span>●</span><strong>Checkers</strong></button>
+      <button class="high-score-picker" type="button" data-open-scores><span>★</span><strong>High scores</strong></button>
+    </nav>
+
+    <section class="game-panel" id="sudokuGame" data-panel="sudoku">
+      <header class="game-heading"><div><p class="sheet-kicker">Number puzzle</p><h2>Sudoku</h2></div><label>Difficulty<select id="sudokuDifficulty"><option value="easy">Easy</option><option value="medium" selected>Medium</option><option value="hard">Hard</option></select></label></header>
+      <div class="sudoku-status"><span id="sudokuMessage">Choose an empty square.</span><button id="newSudoku" type="button">New puzzle</button></div>
+      <div class="sudoku-board" id="sudokuBoard" role="grid" aria-label="Sudoku board"></div>
+      <div class="sudoku-pad" id="sudokuPad" aria-label="Sudoku numbers"></div>
+      <div class="game-actions"><button id="clearSudoku" type="button">Clear square</button><button class="game-primary" id="checkSudoku" type="button">Check puzzle</button></div>
+    </section>
+
+    <section class="game-panel" id="solitaireGame" data-panel="solitaire" hidden>
+      <header class="game-heading"><div><p class="sheet-kicker">Classic cards</p><h2>Klondike</h2></div><div class="game-heading-controls"><label>Difficulty<select id="solitaireDifficulty"><option value="easy">Easy</option><option value="medium" selected>Medium</option><option value="hard">Hard</option></select></label><button id="newSolitaire" type="button">New deal</button></div></header>
+      <div class="solitaire-status"><span id="solitaireMessage">Tap a card, then tap where it should go.</span><span><b id="solitaireMoves">0</b> moves</span><button id="undoSolitaire" type="button" disabled>Undo</button></div>
+      <div class="solitaire-board" id="solitaireBoard">
+        <div class="solitaire-top" id="solitaireTop"></div>
+        <div class="tableau" id="tableau"></div>
+      </div>
+      <p class="game-help">Build downward in alternating colors. Move aces through kings onto the four top piles.</p>
+    </section>
+
+    <section class="game-panel" id="memoryGame" data-panel="memory" hidden>
+      <header class="game-heading"><div><p class="sheet-kicker">Quick match</p><h2>Memory</h2></div><div class="game-heading-controls"><label>Difficulty<select id="memoryDifficulty"><option value="easy">Easy</option><option value="medium" selected>Medium</option><option value="hard">Hard</option></select></label><button id="newMemory" type="button">New game</button></div></header>
+      <div class="memory-status"><span id="memoryMessage">Find all eight matching pairs.</span><strong><span id="memoryMoves">0</span> moves</strong></div>
+      <div class="memory-board" id="memoryBoard" aria-label="Memory cards"></div>
+    </section>
+
+    <section class="game-panel" id="chessGame" data-panel="chess" hidden>
+      <header class="game-heading"><div><p class="sheet-kicker">Board classic</p><h2>Chess</h2></div><div class="game-heading-controls chess-controls"><label>Mode<select id="chessMode"><option value="solo">Single player</option><option value="two">Two players</option></select></label><label id="chessSideField">Play as<select id="chessSide"><option value="alternate" selected>Alternate</option><option value="white">White</option><option value="black">Black</option></select></label><label id="chessDifficultyField">Difficulty<select id="chessDifficulty"><option value="easy">Easy</option><option value="medium" selected>Medium</option><option value="hard">Hard</option></select></label><button id="newChess" type="button">New game</button></div></header>
+      <p class="chess-rating-summary" id="chessRatingSummary">Loading your Chess rating…</p>
+      <div class="board-game-status"><span id="chessMessage">White moves first.</span><span><b id="chessMoves">0</b> moves</span><button id="undoChess" type="button" disabled>Undo</button></div>
+      <div class="strategy-board chess-board" id="chessBoard" role="grid" aria-label="Chess board"></div>
+      <p class="game-help">Play against David-Pi or pass the phone back and forth. Castling and en passant are supported. Tap a piece, then a highlighted square.</p>
+    </section>
+
+    <section class="game-panel" id="checkersGame" data-panel="checkers" hidden>
+      <header class="game-heading"><div><p class="sheet-kicker">Board classic</p><h2>Checkers</h2></div><div class="game-heading-controls"><label>Mode<select id="checkersMode"><option value="solo">Single player</option><option value="two">Two players</option></select></label><label id="checkersDifficultyField">Difficulty<select id="checkersDifficulty"><option value="easy">Easy</option><option value="medium" selected>Medium</option><option value="hard">Hard</option></select></label><button id="newCheckers" type="button">New game</button></div></header>
+      <div class="board-game-status"><span id="checkersMessage">Coral moves first.</span><span><b id="checkersMoves">0</b> moves</span><button id="undoCheckers" type="button" disabled>Undo</button></div>
+      <div class="strategy-board checkers-board" id="checkersBoard" role="grid" aria-label="Checkers board"></div>
+      <p class="game-help">Play against David-Pi or pass-and-play. Jumps are required; keep jumping when another capture is available.</p>
+    </section>
+
+    <section class="game-panel leaderboard-panel" id="scoresGame" data-games-scores hidden>
+      <header class="leaderboard-heading"><div><p class="sheet-kicker">Completed games</p><h2>High scores</h2><p>See who leads every game and why. Difficulty, move efficiency, and time are compared together; Chess uses Elo.</p></div></header>
+      <nav class="leaderboard-tabs" aria-label="High score type">
+        <button class="selected" type="button" data-score-scope="household">David-Pi highscores</button>
+        <button type="button" data-score-scope="personal">Personal best</button>
+      </nav>
+      <div class="leaderboard-overview" id="leaderboardList" aria-live="polite"><p class="leaderboard-empty">Loading completed games…</p></div>
+    </section>
+  </main>
+  <div class="toast" id="gameToast" role="status" aria-live="polite" hidden></div>
+  <script src="/static/chess-engine.js?v=1" defer></script>
+  <script src="/static/games.js?v=8" defer></script>
+  <script>if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js');</script>
+</body>
+</html>

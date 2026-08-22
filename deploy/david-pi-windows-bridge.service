@@ -1,0 +1,33 @@
+[Unit]
+Description=David-Pi Windows Codex broker bridge
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=10001
+Group=10001
+EnvironmentFile=/etc/david-pi/windows-broker.env
+ExecStart=/usr/local/lib/david-pi/david-pi-windows-bridge.py
+Restart=on-failure
+RestartSec=5
+RuntimeDirectory=david-pi-windows
+RuntimeDirectoryMode=0750
+UMask=0007
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+MemoryMax=64M
+TasksMax=32
+
+[Install]
+WantedBy=multi-user.target

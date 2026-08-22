@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="csrf-token" content="{{ csrf_token }}">
+  <meta name="theme-color" content="#fffaf2">
+  <title>Date Night · David-Pi</title>
+  <link rel="stylesheet" href="/static/app.css?v=14">
+  <link rel="stylesheet" href="/static/platform.css?v=16">
+</head>
+<body class="module-page" data-cuisines="{{ cuisines|tojson|forceescape }}">
+  <header class="module-bar">
+    <a class="back" href="/" aria-label="Back home">&larr;</a>
+    <div><p>David-Pi</p><h1>Date Night</h1></div>
+    <button class="round-primary compact-primary" id="openRestaurant">+ Add</button>
+  </header>
+  <main class="module-shell places-shell">
+    <section class="module-intro places-intro">
+      <div><p class="sheet-kicker">Dinner plans</p><h2>Where should we go?</h2><p>Save places, remember favorites, and let David-Pi choose.</p></div>
+    </section>
+    <nav class="places-tabs" id="placesTabs" aria-label="Date Night sections">
+      <button class="selected" data-tab="want_to_go">Want to go</button>
+      <button data-tab="reviewed">Reviewed</button>
+      <button data-tab="choose">Choose for us</button>
+      <button data-tab="margaritas">Chili's Margs</button>
+    </nav>
+
+    <section id="restaurantPanel">
+      <div class="places-tools">
+        <label class="module-search"><span aria-hidden="true">&#8981;</span><input id="restaurantSearch" type="search" maxlength="120" placeholder="Search restaurants or food"></label>
+        <select id="restaurantSort" aria-label="Sort restaurants">
+          <option value="recent">Recently updated</option>
+          <option value="rating">Highest rated</option>
+          <option value="name">Name</option>
+        </select>
+      </div>
+      <section class="restaurant-list" id="restaurantList" aria-live="polite"></section>
+      <section class="module-empty places-empty" id="placesEmpty" hidden>
+        <span aria-hidden="true">&#9733;</span><h2>Start a restaurant list.</h2>
+        <p>Add somewhere you both want to try.</p><button class="big-button" id="emptyAddRestaurant">Add a restaurant</button>
+      </section>
+    </section>
+
+    <section class="chooser-panel" id="chooserPanel" hidden>
+      <div class="chooser-card">
+        <p class="sheet-kicker">No more deciding</p><h2>Choose for us</h2>
+        <fieldset class="choice-pools"><legend>Pick from</legend>
+          <label><input type="radio" name="choicePool" value="all" checked> Everything</label>
+          <label><input type="radio" name="choicePool" value="unvisited"> Places we haven't tried</label>
+          <label><input type="radio" name="choicePool" value="highly_rated"> Highly rated favorites</label>
+        </fieldset>
+        <p class="field-label">Narrow by food type (optional)</p>
+        <div class="cuisine-chips chooser-cuisines"></div>
+        <button class="big-button" id="chooseRestaurant">Choose a restaurant</button>
+      </div>
+      <article class="choice-result" id="choiceResult" hidden aria-live="polite"></article>
+    </section>
+
+    <section id="margaritaPanel" hidden>
+      <div class="marg-heading"><div><p class="sheet-kicker">Chili's Marg of the Month</p><h2>A year of margaritas</h2></div><p>Tap a month to add the name, photo, and your half-star rating.</p></div>
+      <section class="marg-grid" id="margGrid" aria-live="polite"></section>
+    </section>
+  </main>
+
+  <dialog class="small-sheet" id="restaurantSheet">
+    <button class="close" id="closeRestaurant">&times;</button>
+    <p class="sheet-kicker">Our list</p><h2 id="restaurantSheetTitle">Add a restaurant</h2>
+    <label class="text-field">Restaurant name<input id="restaurantName" maxlength="160" autocomplete="off"></label>
+    <p class="field-label">What kind of food?</p><div class="cuisine-chips editor-cuisines"></div>
+    <label class="text-field">Other food types <small>Separate more than one with commas</small><input id="restaurantCustomCuisine" maxlength="200" placeholder="Cajun, Fusion"></label>
+    <label class="text-field">Notes<textarea id="restaurantNotes" maxlength="1500" placeholder="Neighborhood, something to order, or why it sounds good"></textarea></label>
+    <label class="marg-photo">Photos from this place<input id="restaurantImage" type="file" accept="image/jpeg,image/png,image/webp,image/heic,image/heif" multiple><span id="restaurantImageLabel">Choose photos</span><small>Up to 12 per restaurant. Add food, drinks, and memories.</small></label>
+    <div class="restaurant-new-photo-selection" id="restaurantNewPhotoSelection" hidden><strong id="restaurantSelectedPhotoCount"></strong></div>
+    <div class="restaurant-photo-editor" id="restaurantPhotoEditor" hidden></div>
+    <button class="big-button" id="saveRestaurant">Add to our list</button>
+    <p class="upload-message" id="restaurantMessage"></p>
+  </dialog>
+
+  <dialog class="place-photo-viewer" id="placePhotoViewer">
+    <button class="place-photo-close" id="closePlacePhotos" type="button" aria-label="Close photos">&times;</button>
+    <button class="place-photo-nav place-photo-prev" id="previousPlacePhoto" type="button" aria-label="Previous photo">&lsaquo;</button>
+    <div class="place-photo-stage" id="placePhotoStage"><img id="placePhotoImage" alt=""></div>
+    <button class="place-photo-nav place-photo-next" id="nextPlacePhoto" type="button" aria-label="Next photo">&rsaquo;</button>
+    <p class="place-photo-count" id="placePhotoCount"></p>
+  </dialog>
+
+  <dialog class="small-sheet" id="reviewSheet">
+    <button class="close" id="closeReview">&times;</button>
+    <p class="sheet-kicker">We went!</p><h2 id="reviewRestaurantName">Rate this restaurant</h2>
+    <div class="star-picker">
+      <output id="reviewStars" aria-live="polite">4 stars</output>
+      <input id="reviewRating" type="range" min="1" max="5" value="4" step="0.5" aria-label="Rating from 1 to 5 stars">
+      <div><span>1</span><span>5</span></div>
+    </div>
+    <label class="text-field">When did you go?<input id="reviewDate" type="date"></label>
+    <label class="text-field">What did you think?<textarea id="reviewText" maxlength="5000" placeholder="What was good? What would you order next time?"></textarea></label>
+    <button class="big-button" id="saveReview">Save review</button>
+    <p class="upload-message" id="reviewMessage"></p>
+  </dialog>
+
+  <dialog class="small-sheet" id="margSheet">
+    <button class="close" id="closeMarg">&times;</button>
+    <p class="sheet-kicker">Marg of the Month</p><h2 id="margMonth">January</h2>
+    <label class="text-field">Margarita name<input id="margName" maxlength="160"></label>
+    <div class="star-picker">
+      <output id="margStars">Not rated yet</output>
+      <input id="margRating" type="range" min="0" max="5" value="0" step="0.5" aria-label="Rating from 1 to 5 stars, or not rated">
+      <div><span>Not rated</span><span>5</span></div>
+    </div>
+    <label class="marg-photo">Photo<input id="margImage" type="file" accept="image/jpeg,image/png,image/webp,image/heic,image/heif"><span>Choose a photo</span></label>
+    <label class="remove-photo" id="removePhotoWrap" hidden><input id="removeMargImage" type="checkbox"> Remove current photo</label>
+    <label class="text-field">Notes<textarea id="margReview" maxlength="3000" placeholder="Sweet, tart, strong—what did you think?"></textarea></label>
+    <button class="big-button" id="saveMarg">Save this month</button>
+    <p class="upload-message" id="margMessage"></p>
+  </dialog>
+
+  <dialog class="confirm-sheet" id="placeConfirm">
+    <h2>Remove this restaurant?</h2><p>Its saved review will also be removed.</p>
+    <div class="confirm-actions"><button id="cancelPlaceDelete">Cancel</button><button class="danger-button" id="acceptPlaceDelete">Remove</button></div>
+  </dialog>
+  <div class="toast" id="platformToast" hidden role="status"></div>
+  <script src="/static/mobile-dialog-host.js?v=7" defer></script>
+  <script src="/static/places.js?v=6" defer></script>
+</body>
+</html>

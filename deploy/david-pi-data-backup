@@ -1,0 +1,171 @@
+#!/bin/bash
+# Versioned, physically independent David-Pi data snapshots.
+set -Eeuo pipefail
+umask 077
+
+SOURCE=/srv/data/family-photos
+DESTINATION=/srv/backup-data
+SENTINEL="$DESTINATION/.david-pi-backup-storage"
+EXPECTED_SENTINEL=david-pi-independent-backup-v1
+STATE=/etc/david-pi/install-state.env
+SNAPSHOTS="$DESTINATION/snapshots"
+KEEP_SNAPSHOTS="${DAVID_PI_BACKUP_KEEP:-14}"
+STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+WORK="$SNAPSHOTS/.incomplete-$STAMP"
+FINAL="$SNAPSHOTS/$STAMP"
+LATEST="$SNAPSHOTS/latest"
+PORTAL_CONTAINER=family-photo-portal
+PORTAL_WAS_RUNNING=0
+
+log() {
+    printf '%s %s\n' "$(date -u +%FT%TZ)" "$*"
+}
+
+fail() {
+    log "ERROR: $*" >&2
+    exit 1
+}
+
+restart_portal() {
+    if [ "$PORTAL_WAS_RUNNING" -eq 1 ]; then
+        docker start "$PORTAL_CONTAINER" >/dev/null || true
+    fi
+}
+trap restart_portal EXIT
+
+[ "$(id -u)" -eq 0 ] || fail "must run as root"
+[ -r "$STATE" ] || fail "installer storage state is unavailable"
+# Root-owned installer state contains shell-escaped, non-secret choices only.
+. "$STATE"
+[ -n "${BACKUP_UUID:-}" ] || fail "expected backup UUID is not configured"
+mountpoint -q /srv/data || fail "production storage is not mounted"
+mountpoint -q "$DESTINATION" || fail "backup storage is not mounted"
+[ -f "$SENTINEL" ] || fail "backup sentinel is missing"
+[ "$(cat "$SENTINEL")" = "$EXPECTED_SENTINEL" ] || fail "backup sentinel is invalid"
+[ "$(findmnt -no UUID -T "$DESTINATION")" = "$BACKUP_UUID" ] ||
+    fail "unexpected backup filesystem"
+[ "$(findmnt -no SOURCE -T "$SOURCE")" != "$(findmnt -no SOURCE -T "$DESTINATION")" ] ||
+    fail "source and destination share a filesystem"
+
+mkdir -p "$SNAPSHOTS"
+mapfile -t incomplete_snapshots < <(
+    find "$SNAPSHOTS" -mindepth 1 -maxdepth 1 -type d -name '.incomplete-20*T*Z' -print |
+        sort
+)
+if [ "${#incomplete_snapshots[@]}" -gt 1 ]; then
+    fail "multiple incomplete snapshots require manual review"
+elif [ "${#incomplete_snapshots[@]}" -eq 1 ]; then
+    WORK="${incomplete_snapshots[0]}"
+    STAMP="${WORK##*/.incomplete-}"
+    FINAL="$SNAPSHOTS/$STAMP"
+    log "resuming incomplete snapshot $STAMP"
+fi
+[ ! -e "$FINAL" ] || fail "snapshot already exists"
+mkdir -p "$WORK/data" "$WORK/config" "$WORK/databases"
+
+LINK_DEST=()
+if [ -L "$LATEST" ] && [ -d "$LATEST/data" ]; then
+    LINK_DEST=(--link-dest="$LATEST/data")
+fi
+
+log "copying immutable and application data"
+rsync -aHAX --numeric-ids --delete --delete-excluded \
+    --exclude='/incoming/***' \
+    --exclude='/tmp/***' \
+    --exclude='/files/incoming/***' \
+    --exclude='*.db' \
+    --exclude='*.db-wal' \
+    --exclude='*.db-shm' \
+    "${LINK_DEST[@]}" \
+    "$SOURCE/" "$WORK/data/"
+
+if docker inspect "$PORTAL_CONTAINER" >/dev/null 2>&1 &&
+   [ "$(docker inspect -f '{{.State.Running}}' "$PORTAL_CONTAINER")" = true ]; then
+    PORTAL_WAS_RUNNING=1
+    log "briefly pausing portal for a consistent final pass"
+    docker stop --time 45 "$PORTAL_CONTAINER" >/dev/null
+fi
+
+rsync -aHAX --numeric-ids --delete --delete-excluded \
+    --exclude='/incoming/***' \
+    --exclude='/tmp/***' \
+    --exclude='/files/incoming/***' \
+    --exclude='*.db' \
+    --exclude='*.db-wal' \
+    --exclude='*.db-shm' \
+    "${LINK_DEST[@]}" \
+    "$SOURCE/" "$WORK/data/"
+
+log "creating transactionally consistent SQLite copies"
+SOURCE="$SOURCE" DATABASE_DEST="$WORK/databases" python3 - <<'PY'
+from pathlib import Path
+import os
+import sqlite3
+
+source = Path(os.environ["SOURCE"])
+destination = Path(os.environ["DATABASE_DEST"])
+databases = sorted(source.rglob("*.db"))
+if not databases:
+    raise SystemExit("no SQLite databases found")
+
+for database in databases:
+    relative = database.relative_to(source)
+    output = destination / relative
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(f"file:{database}?mode=ro", uri=True, timeout=30) as src:
+        with sqlite3.connect(output) as dst:
+            src.backup(dst)
+            result = dst.execute("PRAGMA quick_check").fetchone()
+            if not result or result[0] != "ok":
+                raise RuntimeError(f"quick_check failed for {relative}")
+
+(destination / "DATABASE_COUNT").write_text(f"{len(databases)}\n", encoding="ascii")
+PY
+
+log "copying recovery configuration"
+rsync -aHAX --numeric-ids --delete /srv/compose/photo-portal/ "$WORK/config/photo-portal/"
+install -D -m 0600 /etc/fstab "$WORK/config/host/etc/fstab"
+mkdir -p \
+    "$WORK/config/host/systemd" \
+    "$WORK/config/host/usr-local-sbin" \
+    "$WORK/config/host/etc/ssh/sshd_config.d"
+if [ -d /etc/ssh/sshd_config.d ]; then
+    rsync -a /etc/ssh/sshd_config.d/ "$WORK/config/host/etc/ssh/sshd_config.d/"
+fi
+find /etc/systemd/system -maxdepth 1 -type f -name 'david-pi*' -exec cp -a {} "$WORK/config/host/systemd/" \; 2>/dev/null || true
+find /usr/local/sbin -maxdepth 1 -type f -name 'david-pi*' -exec cp -a {} "$WORK/config/host/usr-local-sbin/" \; 2>/dev/null || true
+
+cat >"$WORK/MANIFEST.txt" <<EOF
+snapshot=$STAMP
+source_device=$(findmnt -no SOURCE -T "$SOURCE")
+source_uuid=$(findmnt -no UUID -T "$SOURCE")
+backup_device=$(findmnt -no SOURCE -T "$DESTINATION")
+backup_uuid=$(findmnt -no UUID -T "$DESTINATION")
+database_count=$(cat "$WORK/databases/DATABASE_COUNT")
+portal_image=$(docker inspect -f '{{.Config.Image}}' "$PORTAL_CONTAINER" 2>/dev/null || echo unavailable)
+EOF
+
+sync -f "$WORK"
+mv "$WORK" "$FINAL"
+ln -sfn "$STAMP" "$LATEST.new"
+mv -Tf "$LATEST.new" "$LATEST"
+
+mapfile -t old_snapshots < <(
+    find "$SNAPSHOTS" -mindepth 1 -maxdepth 1 -type d -name '20*T*Z' -printf '%f\n' |
+        sort -r | tail -n "+$((KEEP_SNAPSHOTS + 1))"
+)
+for snapshot in "${old_snapshots[@]}"; do
+    rm -rf --one-file-system "$SNAPSHOTS/$snapshot"
+done
+
+restart_portal
+PORTAL_WAS_RUNNING=0
+
+cat >"$DESTINATION/last-success.json.tmp" <<EOF
+{"schema_version":1,"completed_at":"$(date -u +%FT%TZ)","snapshot":"$STAMP","database_count":$(cat "$FINAL/databases/DATABASE_COUNT"),"state":"healthy"}
+EOF
+chmod 0600 "$DESTINATION/last-success.json.tmp"
+mv "$DESTINATION/last-success.json.tmp" "$DESTINATION/last-success.json"
+sync -f "$DESTINATION"
+
+log "snapshot $STAMP completed"
