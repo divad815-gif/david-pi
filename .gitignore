@@ -27,6 +27,5 @@ support-bundle-*.tar.gz
 *.sqlite
 *.tgz
 *.tar.gz
-backups/
-data/
-
+/backups/
+/data/
