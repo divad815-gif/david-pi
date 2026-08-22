@@ -4,5 +4,5 @@ Pillow==11.3.0
 pillow-heif==1.1.0
 qrcode[pil]==8.2
 cryptography==45.0.7
-pywebpush==2.0.3
+pywebpush==2.4.0
 google-auth==2.40.3
