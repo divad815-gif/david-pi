@@ -1,6 +1,6 @@
 services:
   photo-portal:
-    image: ${DAVID_PI_IMAGE:-david-pi:9.22.1}
+    image: ${DAVID_PI_IMAGE:-david-pi:9.22.2}
     container_name: family-photo-portal
     restart: "no"
     ports:
@@ -92,7 +92,7 @@ services:
         max-file: "3"
     stop_grace_period: 30s
   chat-notifier:
-    image: ${DAVID_PI_IMAGE:-david-pi:9.22.1}
+    image: ${DAVID_PI_IMAGE:-david-pi:9.22.2}
     container_name: david-pi-chat-notifier
     restart: unless-stopped
     command: ["python", "-m", "modules.chat_notify_worker"]
@@ -134,7 +134,7 @@ services:
         max-file: "2"
     stop_grace_period: 10s
   audiobook-preparer:
-    image: ${DAVID_PI_IMAGE:-david-pi:9.22.1}
+    image: ${DAVID_PI_IMAGE:-david-pi:9.22.2}
     container_name: david-pi-audiobook-preparer
     restart: unless-stopped
     command: ["python", "-m", "modules.audiobook_prepare_worker"]

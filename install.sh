@@ -98,5 +98,33 @@ if [[ "${DAVID_PI_BOOTSTRAP_VERIFY_ONLY:-0}" == 1 ]]; then
   exit 0
 fi
 
+# Keep a verified copy of the installer available if guided setup deliberately
+# stops on a blank disk.  The user must be able to run `david-pi
+# prepare-storage` and then resume without downloading an unverified or
+# short-lived copy of the CLI.  The completed application install replaces
+# this symlink with /usr/local/lib/david-pi/david-pi.
+if [[ "$TEST_MODE" == 1 ]]; then
+  BOOTSTRAP_ROOT="${DAVID_PI_BOOTSTRAP_INSTALL_ROOT:-$WORK/persistent-bootstrap}"
+  CLI_LINK="${DAVID_PI_BOOTSTRAP_CLI_LINK:-$WORK/bin/david-pi}"
+else
+  BOOTSTRAP_ROOT="/usr/local/lib/david-pi-bootstrap-$VERSION"
+  CLI_LINK="/usr/local/bin/david-pi"
+fi
+BOOTSTRAP_STAGE="${BOOTSTRAP_ROOT}.new.$$"
+rm -rf -- "$BOOTSTRAP_STAGE"
+mkdir -p -- "$(dirname "$BOOTSTRAP_ROOT")" "$(dirname "$CLI_LINK")"
+cp -a -- "$ROOT" "$BOOTSTRAP_STAGE"
+rm -rf -- "$BOOTSTRAP_ROOT"
+mv -- "$BOOTSTRAP_STAGE" "$BOOTSTRAP_ROOT"
+chmod 0755 "$BOOTSTRAP_ROOT/david-pi"
+ln -sfn -- "$BOOTSTRAP_ROOT/david-pi" "$CLI_LINK"
+
 export DAVID_PI_IMAGE_OVERRIDE="$IMAGE"
-"$ROOT/david-pi" setup
+"$BOOTSTRAP_ROOT/david-pi" setup
+
+# On success dp_install_application has installed the final CLI and repointed
+# the link.  Remove only this versioned bootstrap copy; failed or interrupted
+# setup exits before this point so its recovery CLI remains available.
+if [[ "$(readlink -f "$CLI_LINK")" != "$BOOTSTRAP_ROOT/david-pi" ]]; then
+  rm -rf -- "$BOOTSTRAP_ROOT"
+fi

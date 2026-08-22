@@ -143,6 +143,8 @@ def test_release_bootstrap_is_checksum_first_and_cleans_up():
     assert bootstrap.index('[[ "$actual" == "$ARCHIVE_SHA256" ]]') < bootstrap.index("tar -xzf")
     assert "trap cleanup EXIT INT TERM HUP" in bootstrap
     assert "DAVID_PI_IMAGE_OVERRIDE" in bootstrap
+    assert "david-pi-bootstrap-$VERSION" in bootstrap
+    assert 'ln -sfn -- "$BOOTSTRAP_ROOT/david-pi" "$CLI_LINK"' in bootstrap
     assert "release-manifest.txt" in release
     assert "steps.build.outputs.digest" in release
     assert "Verify anonymous release and image access" in release
