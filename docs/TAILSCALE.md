@@ -2,39 +2,105 @@
 
 ![Private household access and separate backup storage](images/private-home.svg)
 
-Tailscale connects your devices privately and supplies the server’s HTTPS
-address. A Tailscale account is always required for this release. Check the
-[current plans](https://tailscale.com/pricing) for your household size and use.
+Tailscale connects your devices privately and supplies the server's HTTPS
+address. Its network is called a **tailnet**. A Tailscale account is required for
+this release. Check the [current plans](https://tailscale.com/pricing) for your
+household size and use.
 
-1. Create your own account at [Tailscale](https://tailscale.com/).
-2. Install the [Tailscale app](https://tailscale.com/download) on the phone or
-   computer opening setup and sign in.
-3. Run the server installer. Follow its Tailscale login link and approve the
-   server under the intended owner’s network.
-4. Enable MagicDNS and HTTPS certificates in your Tailscale DNS settings if the
-   setup check requests them. Certificate issuance records the certificate
-   hostname in public certificate-transparency logs; the website itself remains
-   private. Choose a hostname that does not reveal sensitive information.
-5. Return to the terminal and open the private HTTPS wizard link from step 2’s device.
+## 1. Connect the device where you will open the wizard
 
-The wizard uses Tailscale Serve to forward private HTTPS to the local setup
-service, then switches its own mapping to the completed portal. It inspects and
-preserves unrelated existing Serve settings. If HTTPS port 443 already belongs
-to another service, resolve that conflict deliberately before retrying. Never
-use `tailscale serve reset` merely to get past a setup error.
+Create or sign into your household account at [Tailscale](https://tailscale.com/).
+On the add-device screen, select the operating system of the computer or phone
+you are using for the wizard. Install the [Tailscale app](https://tailscale.com/download)
+there, open it, and sign in using the same account. The device should then appear
+in the admin console. See the [official quickstart](https://tailscale.com/docs/how-to/quickstart).
 
-After installation, invite each household member through your Tailscale admin
-console using their own login, then separately admit that exact identity in the
-portal’s household settings. Joining the network does not make someone a portal
-member or administrator. Limit network access through your Tailscale access
-policy where needed. Keep at least one verified portal administrator.
+This device is your **setup device**. It does not become the home server merely
+because you installed Tailscale on it. The installer connects the actual server
+in step 2. If onboarding asks for a second device, use that server as the second
+device; continue to the admin console when both appear.
 
-If the server is unreachable, check Tailscale is signed in on both devices,
-confirm the actual hostname in the Tailscale machine list, and inspect Serve
-status from a local server terminal. A website display-name change does not
-change the address. A deliberate address change requires re-opening the new
-address and re-pairing/reconnecting Android as directed.
+**Checkpoint:** the Tailscale app says connected and the admin console shows
+your setup device in the intended network.
 
-Official references: [Serve](https://tailscale.com/docs/features/tailscale-serve),
-[HTTPS certificates](https://tailscale.com/docs/how-to/set-up-https-certificates),
-[inviting users](https://tailscale.com/docs/how-to/invite-users).
+### Already using Tailscale, or testing in a separate network?
+
+A separate test network is useful for a disposable test, but is not required
+for normal installation. Use the client's add-account/switch-account feature
+to keep an existing login available. On Linux, `tailscale switch --list` shows
+saved accounts and marks the active one. Use `sudo tailscale login` to add an
+account, then `sudo tailscale switch <account-or-nickname>` to select a saved
+one. Substitute the actual account or nickname; do not type the angle brackets.
+
+Switching accounts does not delete the previous network or its devices. This
+computer can reach only its currently active tailnet through that client, so
+access to the other network pauses until you switch back. The browser's
+Tailscale admin-console login can differ from the app's active account; check
+both. A private/incognito window helps separate browser logins but does not
+switch the Tailscale app. See [Tailscale account switching](https://tailscale.com/docs/features/client/fast-user-switching).
+
+## 2. Connect the server
+
+Run the [installation command](INSTALL.md#3-run-the-verified-bootstrap-on-the-server)
+in the **server terminal**. Enter the intended owner's exact individual
+Tailscale login. If the terminal prints a Tailscale login link, open it in the
+setup device's browser. Check the selected account and network before approving
+the server.
+
+**Checkpoint:** the [Machines page](https://console.tailscale.com/admin/machines)
+shows both the server and your setup device under the intended network. Existing
+Tailscale settings are inspected; setup does not reset an existing network.
+
+## 3. Enable HTTPS certificates
+
+Do this in the **setup device's browser**, in the Tailscale admin console:
+
+1. Open the [DNS page](https://console.tailscale.com/admin/dns). Check the account
+   and network displayed before changing settings.
+2. Enable **MagicDNS** if it is not already enabled.
+3. Find **HTTPS Certificates** and choose **Enable HTTPS**.
+4. Read and accept the confirmation about publishing certificate names. Opening
+   that confirmation alone does not enable certificates; finish its confirmation
+   action and check that HTTPS is now enabled.
+
+Issued certificate names include the server hostname and tailnet DNS name in
+public certificate-transparency records. The website remains private. Choose
+a hostname without sensitive information. [Official HTTPS instructions](https://tailscale.com/docs/how-to/set-up-https-certificates).
+
+David-Pi uses Tailscale Serve to obtain and use the certificate; you do not need
+to download a certificate or run `tailscale cert` yourself. Serve requires HTTPS
+to be enabled. [Official Serve documentation](https://tailscale.com/docs/features/tailscale-serve).
+
+Return to the **server terminal** and press Enter at the HTTPS checkpoint.
+If setup exited with an HTTPS error, run `sudo david-pi setup` again. Follow
+the private setup address it prints.
+This address is different from the Tailscale login and admin-console links.
+
+**Checkpoint:** the private HTTPS address opens the **Claim your server** page
+without a certificate warning. Continue in the [browser wizard](INSTALL.md#5-complete-the-browser-wizard).
+
+## Keep and recover your portal address
+
+The wizard shows the actual assigned HTTPS address with a copy action. Bookmark
+it; it will open the finished portal after installation. To find it again, run
+`sudo david-pi address` in the server terminal. Use the full address including
+the tailnet name and any hostname collision suffix. Changing the website's
+display name does not change this address.
+
+The wizard uses private Serve access to reach its temporary setup service and
+then the completed portal. It preserves unrelated Serve settings. If HTTPS
+port 443 already belongs to another service, resolve that conflict deliberately
+before retrying. Do not use `tailscale serve reset` to get past the error.
+David-Pi does not enable Funnel.
+
+## Add the rest of the household
+
+After installation, [invite each household member](https://tailscale.com/docs/how-to/invite-users)
+to your tailnet using their own login. Then separately admit that exact identity
+in the portal's household settings. Joining Tailscale does not grant portal
+membership or administrator rights. See [household access](HOUSEHOLD.md).
+
+If the portal becomes unreachable, first check the app's active account on both
+devices and retrieve the actual address from the server. A deliberate address
+change needs the [reconnect workflow](HOUSEHOLD.md) and Android reconnection;
+editing a bookmark alone does not approve a new server origin.

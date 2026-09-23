@@ -39,6 +39,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+from zoneinfo import available_timezones
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -107,6 +108,43 @@ def safe_path(path, *, exists=True):
     if exists and not p.is_dir():
         raise HostError("The selected storage folder does not exist")
     return p
+
+
+def saved_address(etc):
+    """Read only the saved private origin; never print claim or session secrets."""
+    root = Path(etc)
+    try:
+        config = read_json(root / "installation.json")
+        setup = read_json(root / "host-state/setup.json", {}) if config is None else {}
+    except (OSError, ValueError):
+        raise HostError("The saved private address cannot be read; inspect local configuration before continuing") from None
+    if (config is not None and not isinstance(config, dict)) or not isinstance(setup, dict):
+        raise HostError("The saved private address is invalid; inspect local configuration before continuing")
+    value = config.get("public_url") if config is not None else setup.get("origin")
+    if not value:
+        raise HostError("No private address is saved yet. Run sudo david-pi setup on the server")
+    try:
+        return validate_origin(value)
+    except InstallationError:
+        raise HostError("The saved private address is invalid; inspect local configuration before continuing") from None
+
+
+def print_address(etc):
+    print(f"Your saved private home-server address:\n  {saved_address(etc)}/\nOpen it on a device connected to your household's Tailscale network.\nIf you deliberately renamed or moved the server, use sudo david-pi reconnect first.")
+
+
+def saved_release_arguments(etc):
+    """Validated values for a resumed terminal setup, without shell evaluation."""
+    try:
+        release = read_json(Path(etc) / "release.json", {})
+    except (OSError, ValueError):
+        raise HostError("Saved release metadata cannot be read. Resume using the verified stable release installer") from None
+    if not isinstance(release, dict):
+        raise HostError("No verified release is saved. Resume using the verified stable release installer")
+    image, repository = release.get("image", ""), release.get("repository", "")
+    if not isinstance(image, str) or not isinstance(repository, str) or not IMAGE.fullmatch(image) or not REPOSITORY.fullmatch(repository) or not image.startswith(f"ghcr.io/{repository.lower()}@"):
+        raise HostError("No verified release is saved. Resume using the verified stable release installer")
+    return image, repository
 
 
 def validate_archive(archive, destination):
@@ -515,12 +553,115 @@ class Controller:
             raise HostError("Storage must be a mounted local ext4 filesystem")
         return info
 
+    def storage_devices(self):
+        """Identify ordinary disks and partitions; omit ambiguous stacked devices."""
+        value = json.loads(self.runner(["lsblk", "--json", "--paths", "--output", "NAME,TYPE,PKNAME,MAJ:MIN,SERIAL,WWN"]))
+        nodes = {}
+        def collect(items):
+            for item in items:
+                nodes[item["name"]] = item
+                collect(item.get("children", []))
+        collect(value.get("blockdevices", []))
+        result = {}
+        for name, item in nodes.items():
+            if item.get("type") == "disk":
+                disk = item
+            elif item.get("type") == "part" and nodes.get(item.get("pkname"), {}).get("type") == "disk":
+                disk = nodes[item["pkname"]]
+            else:
+                continue
+            identity = {key: disk.get(key) for key in ("name", "maj:min", "serial", "wwn")}
+            result[name] = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
+        return result
+
+    def storage_choices(self):
+        """Read current mounted storage without creating folders or changing disks."""
+        result = {"choices": []}
+        try:
+            mounts = json.loads(self.runner(["findmnt", "--json", "--list", "--output", "SOURCE,FSTYPE,UUID,TARGET,OPTIONS,FSROOT,LABEL"]))["filesystems"]
+            devices = self.storage_devices()
+            roots = [mount for mount in mounts if mount.get("target") == "/"]
+            system_device = devices.get(roots[0].get("source")) if len(roots) == 1 else None
+            # Multiple whole-filesystem mounts cannot be distinguished reliably
+            # from bind aliases. Do not offer them as separate drive choices.
+            counts = {}
+            for mount in mounts:
+                key = (mount.get("source"), mount.get("uuid"))
+                if mount.get("fsroot") == "/":
+                    counts[key] = counts.get(key, 0) + 1
+            seen = set()
+            for mount in mounts:
+                source, target = mount.get("source", ""), mount.get("target", "")
+                options = set(mount.get("options", "").split(","))
+                if (mount.get("fstype") != "ext4" or not mount.get("uuid") or source not in devices
+                        or mount.get("fsroot") != "/" or "rw" not in options or options & {"ro", "bind", "rbind"}
+                        or counts[(source, mount["uuid"])] != 1):
+                    continue
+                parent, mode = ("/srv", "folder") if target == "/" else (target, "drive")
+                if mode == "drive" and any(c.isspace() for c in parent):
+                    continue
+                try:
+                    folder = safe_path(parent)
+                    if not os.access(folder, os.W_OK | os.X_OK) or os.statvfs(folder).f_flag & os.ST_RDONLY:
+                        continue
+                    current = self.inspect_storage(folder)
+                    if any(current.get(key) != mount.get(key) for key in ("source", "uuid", "target")):
+                        continue
+                    capacity = shutil.disk_usage(folder)
+                except (HostError, OSError):
+                    continue
+                if parent in seen:
+                    continue
+                seen.add(parent)
+                device_id = devices[source]
+                identity = [source, mount["uuid"], target, parent, device_id]
+                label = re.sub(r"[\x00-\x1f\x7f]", "", str(mount.get("label") or "")).strip()[:100]
+                label = ("System drive folder" if target == "/" else label or "Prepared ext4 drive") + f" — {parent}"
+                result["choices"].append({"id": hashlib.sha256(json.dumps(identity).encode()).hexdigest(), "label": label,
+                    "parent": parent, "mode": mode, "free_bytes": capacity.free, "total_bytes": capacity.total,
+                    "device_id": device_id, "system_disk": device_id == system_device})
+            result["choices"].sort(key=lambda choice: (choice["system_disk"], choice["parent"]))
+            if not result["choices"]:
+                result["warning"] = "No supported writable ext4 storage was detected. Mount a prepared local ext4 drive, refresh this page, or choose an existing folder under Advanced."
+        except (HostError, OSError, ValueError, KeyError, TypeError):
+            result = {"choices": [], "warning": "Storage discovery is unavailable. Check local storage, refresh this page, or enter an existing folder under Advanced."}
+        return result
+
+    def validate_storage_selection(self, cfg, selection):
+        if selection is None:
+            return
+        if not isinstance(selection, dict) or set(selection) - {"data", "backup"}:
+            raise HostError("Invalid storage selection; refresh the available storage choices")
+        if not selection:
+            return
+        choices = {choice["id"]: choice for choice in self.storage_choices()["choices"]}
+        selected = {}
+        for kind, identifier in selection.items():
+            if not isinstance(identifier, str) or identifier not in choices:
+                raise HostError("A selected drive is missing or has changed. Refresh storage choices and select it again")
+            choice = choices[identifier]
+            expected = str(Path(choice["parent"]) / ("david-pi-data" if kind == "data" else "david-pi-backups"))
+            field = "data_root" if kind == "data" else "backup_root"
+            if cfg["storage"].get(field) != expected or (kind == "data" and cfg["storage"]["mode"] != choice["mode"]):
+                raise HostError("The selected drive and storage folder do not match. Select the drive again")
+            if choice["free_bytes"] < 1024**3:
+                raise HostError("Selected storage needs at least 1 GiB free. Free space or choose another drive")
+            selected[kind] = choice
+        if len(selected) == 2 and selected["data"]["device_id"] == selected["backup"]["device_id"]:
+            raise HostError("Backup and primary storage use the same physical drive")
+
+    def latest_install_job(self):
+        jobs = [read_json(path, {}) for path in self.jobs.glob("*.json")]
+        return max((job for job in jobs if job.get("operation") == "install"), key=lambda job: job.get("created_at", 0), default=None)
+
     def provision_storage(self, cfg):
         data = safe_path(cfg["storage"]["data_root"], exists=False)
         parent = data.parent
         info = self.inspect_storage(parent)
         if data.exists() and any(data.iterdir()) and not (data / ".david-pi-storage").is_file():
             raise HostError("Selected data folder contains unrelated files; choose a dedicated empty folder")
+        # Reject an unsafe backup before any fstab or application folder changes.
+        self.validate_backup_storage(cfg)
         if cfg["storage"]["mode"] == "drive":
             if info["target"] == "/" or parent != Path(info["target"]):
                 raise HostError("Drive storage must be a prepared, mounted ext4 filesystem; choose its mount point")
@@ -543,7 +684,7 @@ class Controller:
             os.chown(existing_sentinel, 0, 10001)
         atomic_json(self.state / "storage.json", {"uuid": info["uuid"], "data_root": str(data)})
 
-    def provision_backup(self, cfg):
+    def validate_backup_storage(self, cfg):
         info = self.inspect_storage(Path(cfg["storage"]["data_root"]).parent)
         backup = cfg["storage"].get("backup_root")
         if backup:
@@ -552,12 +693,17 @@ class Controller:
             if backup_info["uuid"] == info["uuid"]:
                 raise HostError("Independent backup storage must use a different filesystem")
             # Distinct partitions on one device are not independent backups.
-            primary_parent = self.runner(["lsblk", "-ndo", "PKNAME", info["source"]]).strip() or info["source"]
-            backup_parent = self.runner(["lsblk", "-ndo", "PKNAME", backup_info["source"]]).strip() or backup_info["source"]
+            primary_parent = (self.runner(["lsblk", "-ndo", "PKNAME", info["source"]]).strip() or info["source"]).removeprefix("/dev/")
+            backup_parent = (self.runner(["lsblk", "-ndo", "PKNAME", backup_info["source"]]).strip() or backup_info["source"]).removeprefix("/dev/")
             if primary_parent == backup_parent:
                 raise HostError("Backup and primary storage use the same physical drive")
             if backup_path.exists() and any(backup_path.iterdir()) and read_json(backup_path / ".david-pi-backup", {}).get("instance_id") != cfg["instance_id"]:
                 raise HostError("Backup folder contains unrelated files or another installation")
+            return backup_path
+
+    def provision_backup(self, cfg):
+        backup_path = self.validate_backup_storage(cfg)
+        if backup_path is not None:
             backup_path.mkdir(mode=0o700, exist_ok=True)
             atomic_json(backup_path / ".david-pi-backup", {"instance_id": cfg["instance_id"]})
 
@@ -1206,6 +1352,7 @@ class Controller:
         serve_state = self.inspect_private_root(cfg["public_url"])
         atomic_json(self.state / "pending-install.json", cfg)
         self.phase(job, "preparing selected storage")
+        self.validate_storage_selection(cfg, payload.get("storage_selection"))
         self.provision_storage(cfg)
         self.phase(job, "saving local keys and module settings")
         self.secret_update(payload.get("secrets", {}))
@@ -1215,7 +1362,9 @@ class Controller:
         self.runner(["systemctl", "enable", "--now", "david-pi-status.timer"])
         self.runner(["systemctl", "enable", "--now", "david-pi-portal.service"])
         self.docker("up", "-d", "--remove-orphans", "--force-recreate", "--wait", "--wait-timeout", "180")
+        self.phase(job, "checking selected services")
         self.readiness()
+        self.phase(job, "opening your home server")
         self.set_private_root(cfg["public_url"], "http://127.0.0.1:8090", serve_state)
         atomic_json(self.state / "installed.json", {"completed_at": time.time(), "instance_id": cfg["instance_id"]})
         (self.state / "pending-install.json").unlink(missing_ok=True)
@@ -1298,7 +1447,7 @@ class SetupHandler(BaseHTTPRequestHandler):
             state = self.state()
             # After installation this endpoint is a maintenance page only.
             path = urllib.parse.urlsplit(self.path).path
-            if self.controller.config_path.exists() and path == "/":
+            if self.controller.config_path.exists() and (self.controller.state / "installed.json").exists() and path == "/":
                 return self.send(503, b"<!doctype html><title>Server maintenance</title><h1>Server maintenance</h1><p>An administrator is applying an update. Please try again shortly.</p>", "text/html; charset=utf-8")
             if path in {"/", "/setup.js", "/setup.css"}:
                 name = {"/": "index.html", "/setup.js": "setup.js", "/setup.css": "setup.css"}[path]
@@ -1306,7 +1455,8 @@ class SetupHandler(BaseHTTPRequestHandler):
                 return self.send(200, (ROOT / "installer/web" / name).read_bytes(), mime)
             self.session(state)
             if path == "/api/setup":
-                return self.send(200, {"admin": state["admin"], "origin": state["origin"], "hostname": state["hostname"], "csrf": state["csrf"], "instance_id": state["instance_id"], "modules": list(MODULES), "timezone": state.get("timezone", "UTC")})
+                return self.send(200, {"admin": state["admin"], "origin": state["origin"], "hostname": state["hostname"], "csrf": state["csrf"], "instance_id": state["instance_id"], "modules": list(MODULES), "timezone": state.get("timezone", "UTC"),
+                    "timezones": sorted(available_timezones()), "storage": self.controller.storage_choices(), "active_job": self.controller.latest_install_job()})
             if path == "/api/job":
                 identifier = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query).get("id", [""])[0]
                 return self.send(200, self.controller.dispatch("job", {"id": identifier}, state["admin"], local=True))
@@ -1352,6 +1502,7 @@ class SetupHandler(BaseHTTPRequestHandler):
                     raise HostError("Installation identity and address cannot be supplied by the browser")
                 if cfg["modules"].get("pihole") == "enabled":
                     raise HostError("Finish setup, then run sudo david-pi pihole-setup for deliberate DNS configuration")
+                self.controller.validate_storage_selection(cfg, payload.get("storage_selection"))
                 return self.send(202, self.controller.enqueue("install", payload))
             self.send(404, {"error": "Not found"})
         except (HostError, ValueError, KeyError) as error:
@@ -1380,7 +1531,8 @@ def serve(controller):
 
 def initialize(controller, admin, hostname, image, repository):
     if controller.config_path.exists():
-        print("Already configured. Use sudo david-pi status or the private website's administrator settings.")
+        print("Already configured. Use the private website's administrator settings or sudo david-pi status.")
+        print_address(controller.etc)
         return
     if not re.fullmatch(r"[^\s@]+@[^\s@]+", admin) or len(admin) > 254:
         raise HostError("Enter the exact Tailscale account login (usually an email address)")
@@ -1404,6 +1556,9 @@ def initialize(controller, admin, hostname, image, repository):
     dns = urllib.parse.urlsplit(origin).hostname
     serve_state = controller.inspect_private_root(origin)
     actual_hostname = dns.split(".")[0]
+    print(f"\n2. Enable private HTTPS in your Tailscale network\n   Open https://console.tailscale.com/admin/dns using account {admin}.\n   Under HTTPS Certificates, choose Enable HTTPS and review the confirmation.\n   If certificates are already enabled, continue. Keep this terminal open.", flush=True)
+    if sys.stdin.isatty():
+        input("   Press Enter after HTTPS Certificates is enabled: ")
     token = secrets.token_urlsafe(32)
     previous = read_json(controller.state / "setup.json", {})
     try:
@@ -1416,8 +1571,11 @@ def initialize(controller, admin, hostname, image, repository):
     # systemd helper serves setup before application storage exists.
     controller.runner(["systemctl", "enable", "david-pi-helper.service"])
     controller.runner(["systemctl", "restart", "david-pi-helper.service"])
-    controller.set_private_root(origin, "http://127.0.0.1:8091", serve_state)
-    print(f"Open https://{dns}/ using Tailscale account {admin}\nOne-use claim token (valid 15 minutes):\n{token}\nKeep this token private. It is entered in the page, never in a URL.")
+    try:
+        controller.set_private_root(origin, "http://127.0.0.1:8091", serve_state)
+    except HostError as error:
+        raise HostError(f"{error}. If HTTPS Certificates are not enabled, enable them at https://console.tailscale.com/admin/dns using {admin}. Then resume with sudo david-pi setup") from None
+    print(f"\n3. Open your private setup wizard\n   {origin}/\n   Connect this browser's computer or phone to Tailscale using {admin}.\n   The link opens this server's setup wizard; it is different from the Tailscale sign-in link.\n\n4. Claim your home server\n   One-use claim token (valid 15 minutes):\n   {token}\n   Paste the token into the wizard. Keep it private; it never belongs in a URL.\n\nBookmark {origin}/ — this same link opens your home page after setup.\nFind this link again: sudo david-pi address\nIf the claim token expires: sudo david-pi setup\nKeep the server powered on while the wizard shows its installation progress.")
 
 
 def main():
@@ -1427,6 +1585,8 @@ def main():
     sub.add_parser("serve")
     sub.add_parser("storage-guard")
     sub.add_parser("status")
+    sub.add_parser("address")
+    sub.add_parser("setup-release")
     sub.add_parser("verify")
     sub.add_parser("pihole-summary")
     pihole = sub.add_parser("pihole-connect")
@@ -1447,6 +1607,12 @@ def main():
     args = parser.parse_args()
     if os.geteuid() != 0:
         parser.error("Run with sudo on the server")
+    if args.command == "address":
+        print_address(args.etc)
+        return 0
+    if args.command == "setup-release":
+        print("\n".join(saved_release_arguments(args.etc)))
+        return 0
     controller = Controller(args.etc)
     if args.command == "serve":
         serve(controller)

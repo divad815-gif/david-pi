@@ -9,6 +9,7 @@ Usage: sudo david-pi COMMAND
   setup              Run or resume private browser installation
   preflight          Check host compatibility without changing it
   status             Show configuration and recent operation results
+  address            Show the saved private website link (no claim token)
   verify             Verify selected services and storage identity
   update             Check and install the latest verified stable release
   update-check       Show available stable release
@@ -29,7 +30,7 @@ shift || true
 case "$command_name" in
   setup) source "$ROOT/installer/lib/setup.sh"; dp_setup "$@" ;;
   preflight) source "$ROOT/installer/lib/preflight.sh"; dp_preflight "$@" ;;
-  status|verify|recover-admin|restore|reconnect) exec python3 "$ROOT/installer/host.py" "$command_name" "$@" ;;
+  status|address|verify|recover-admin|restore|reconnect) exec python3 "$ROOT/installer/host.py" "$command_name" "$@" ;;
   update|backup|repair) exec python3 "$ROOT/installer/host.py" operation "$command_name" "$@" ;;
   update-check) exec python3 "$ROOT/installer/host.py" operation update_check "$@" ;;
   restore-test) exec python3 "$ROOT/installer/host.py" operation restore_test "$@" ;;

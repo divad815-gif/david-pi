@@ -56,7 +56,16 @@ dp_setup() {
     else
       echo "Already configured. Open your private website's administrator settings or run sudo david-pi status."
     fi
+    python3 "$DP_ROOT/installer/host.py" --etc "$DP_ETC" address
     return
+  fi
+  if [[ -z "$image" && -f "$DP_ETC/release.json" ]]; then
+    local release_details
+    local -a saved_release
+    release_details="$(python3 "$DP_ROOT/installer/host.py" --etc "$DP_ETC" setup-release)" || dp_die "Saved release could not be verified; resume using the verified installer"
+    mapfile -t saved_release <<< "$release_details"
+    image="${saved_release[0]}"
+    repository="${saved_release[1]}"
   fi
   [[ "$image" =~ ^ghcr\.io/[a-z0-9_.-]+/david-pi@sha256:[0-9a-f]{64}$ ]] || dp_die "Use a verified stable release installer; a pinned image digest is required"
   if [[ -z "$admin" ]]; then read -r -p "Your exact Tailscale account login (usually email): " admin; fi
@@ -72,9 +81,14 @@ dp_setup() {
   fi
   dp_install_packages
   status="$(tailscale status --json 2>/dev/null || echo '{}')"
+  printf '\n1. Connect this server to Tailscale\n   Your setup administrator account: %s\n' "$admin"
   if ! python3 -c 'import json,sys;sys.exit(0 if json.load(sys.stdin).get("BackendState")=="Running" else 1)' <<< "$status"; then
-    echo "Sign in using the Tailscale URL below. Keep the same individual account for the setup wizard."
+    echo "   Open the Tailscale sign-in link below in a browser and sign in with that account."
+    echo "   This adds the SERVER to your private network. It is not your home-server website."
+    echo "   After sign-in, return to this terminal; your private website link appears in step 3."
     tailscale up
+  else
+    echo "   This server is already connected; its existing Tailscale settings are preserved."
   fi
   # Refuse an unrelated listener before enabling our temporary setup service.
   if ss -ltnH | awk '{print $4}' | grep -Eq '(^|:)8091$' && ! systemctl is-active -q david-pi-helper.service; then

@@ -705,3 +705,57 @@ def test_metrics_history_rejects_dynamic_columns_paths_ranges_and_symlinks(contr
     with pytest.raises(HostError,match='temporarily unavailable'):
         controller.dispatch('metrics_history',{'metric':'cpu'},'jane@example.test')
     assert outside.read_bytes()==original
+
+
+def test_initial_setup_terminal_waits_for_https_then_shows_actual_collision_hostname(reconnect_host, monkeypatch, capsys):
+    import installer.host as host
+    controller, _, _, origin = reconnect_host
+    controller.config_path.unlink()
+    paused = []
+    monkeypatch.setattr(host.sys, "stdin", type("Interactive", (), {"isatty": lambda self: True})())
+    def confirm(prompt):
+        assert "Press Enter after HTTPS Certificates is enabled" in prompt
+        output = capsys.readouterr().out
+        assert "https://console.tailscale.com/admin/dns" in output and "john@example.test" in output
+        assert not (controller.state / "setup.json").exists()
+        assert not any("--set-path=/" in args for args in controller.calls)
+        paused.append(True)
+        return ""
+    monkeypatch.setattr("builtins.input", confirm)
+    host.initialize(controller, "john@example.test", "john-pi-2", IMAGE, "example/david-pi")
+    output = capsys.readouterr().out
+    assert paused == [True]
+    assert f"3. Open your private setup wizard\n   {origin}/" in output
+    assert "4. Claim your home server" in output and "valid 15 minutes" in output
+    assert "sudo david-pi address" in output and "sudo david-pi setup" in output
+    assert "https://john-pi.example.ts.net/" not in output
+
+
+def test_install_revalidates_browser_storage_before_provisioning(reconnect_host, monkeypatch):
+    controller, _, _, _ = reconnect_host
+    _, perform = configured_operation(reconnect_host, monkeypatch, "install")
+    secrets_before = {str(path): path.read_bytes() for path in (controller.etc / "secrets").rglob("*") if path.is_file()}
+    def changed(configuration, selection):
+        raise HostError("A selected drive is missing or has changed")
+    def no_mutation(configuration):
+        raise AssertionError("Storage must not be provisioned after failed selection validation")
+    monkeypatch.setattr(controller, "validate_storage_selection", changed)
+    monkeypatch.setattr(controller, "provision_storage", no_mutation)
+    with pytest.raises(HostError, match="missing or has changed"):
+        perform()
+    assert not controller.config_path.exists()
+    assert {str(path): path.read_bytes() for path in (controller.etc / "secrets").rglob("*") if path.is_file()} == secrets_before
+    assert not any("--set-path=/" in args for args in controller.calls)
+
+
+def test_install_progress_reports_readiness_before_opening_private_website(reconnect_host, monkeypatch):
+    controller, _, _, _ = reconnect_host
+    _, perform = configured_operation(reconnect_host, monkeypatch, "install")
+    phases = []
+    monkeypatch.setattr(controller, "phase", lambda job, phase: phases.append(phase))
+    def readiness():
+        assert phases[-1] == "checking selected services"
+        return {"ready": True}
+    monkeypatch.setattr(controller, "readiness", readiness)
+    perform()
+    assert phases == ["preparing selected storage", "saving local keys and module settings", "starting selected services", "checking selected services", "opening your home server"]

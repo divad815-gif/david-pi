@@ -134,7 +134,15 @@ ln -sfn -- "$BOOTSTRAP_ROOT/david-pi" "$CLI_LINK"
 
 export DAVID_PI_IMAGE_OVERRIDE="$IMAGE"
 export DAVID_PI_REPOSITORY="$REPOSITORY"
-"$BOOTSTRAP_ROOT/david-pi" setup
+# A piped bootstrap uses standard input for shell source. Interactive setup
+# must read the person's terminal instead of consuming that source or its EOF.
+if [[ -t 0 ]]; then
+  "$BOOTSTRAP_ROOT/david-pi" setup
+elif { true </dev/tty; } 2>/dev/null; then
+  "$BOOTSTRAP_ROOT/david-pi" setup </dev/tty
+else
+  fail "guided setup needs an interactive terminal. Open a terminal on the server (or an interactive SSH session) and run the verified installer there."
+fi
 
 # On success dp_install_application has installed the final CLI and repointed
 # the link.  Remove only this versioned bootstrap copy; failed or interrupted

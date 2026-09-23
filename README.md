@@ -28,19 +28,36 @@ provider accounts. No streaming-service passwords are needed.
 
 ## Install after the stable release is available
 
-Open a terminal on the server, then run:
+Open an interactive terminal on the server (or connect to it with SSH), then run:
 
 ```sh
 curl -fsSL https://github.com/divad815-gif/david-pi/releases/latest/download/install.sh | sudo bash
 ```
 
-The command verifies release files, checks the machine, connects Tailscale and
-prints a private setup link. Open it on a device signed into your Tailscale
-network. Follow the wizard to claim ownership, choose the name and storage,
-select modules, skip or configure integrations, and verify the installation.
+The terminal shows download and machine-check messages, asks a few questions,
+then prints a clearly labeled private setup link and a one-use claim token.
+Open the link on your everyday computer or phone with its **Tailscale app
+connected to the same network**. The server stores your content; this other
+device can simply provide the browser. Enable HTTPS certificates in Tailscale's
+admin console when prompted and complete its confirmation.
+
+Follow the wizard to claim ownership, choose a name and searchable timezone,
+select detected storage with its available space, and choose modules. Skip any
+optional providers and backup destination you do not have yet. The setup progress
+bar shows completed stages through the final readiness checks. Save the full
+private address shown in both the terminal and wizard, including any hostname
+suffix Tailscale assigns.
+
+To retrieve that link later, run this on the server:
+
+```sh
+sudo david-pi address
+```
+
 If `curl` is unavailable, install it and `ca-certificates` using your operating
-system’s package manager first. [Read the complete installation guide](docs/INSTALL.md)
-for inspection before execution and the first-boot checklist.
+system's package manager first. [Read the complete installation guide](docs/INSTALL.md)
+for a terminal example, account and certificate checkpoints, inspection before
+execution, and what to do if setup pauses.
 
 ## Guides
 
