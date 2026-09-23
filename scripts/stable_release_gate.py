@@ -34,7 +34,8 @@ REQUIRED = {
     'accessibility-mobile-keyboard': 'browser',
     'newcomer-unaided-install': 'human',
 }
-EXCLUDED_PARTS = {'.git', '.venv', 'venv', 'build', 'dist', 'work', 'outputs', '__pycache__', '.pytest_cache', '.gradle', '.kotlin'}
+EXCLUDED_ROOTS = {'work', 'outputs'}
+EXCLUDED_PARTS = {'.git', '.venv', 'venv', 'build', 'dist', '__pycache__', '.pytest_cache', '.gradle', '.kotlin'}
 EXCLUDED_SUFFIXES = {'.db', '.sqlite', '.sqlite3', '.pem', '.key', '.jks', '.keystore', '.qcow2', '.img', '.iso', '.pyc'}
 
 
@@ -43,7 +44,9 @@ def source_files(root: Path) -> list[Path]:
     files = []
     for name in sorted(set(raw.decode().split('\0')) - {''}):
         path = Path(name)
-        if any(p in EXCLUDED_PARTS for p in path.parts) or path.suffix in EXCLUDED_SUFFIXES:
+        # Local scratch belongs only to these repository-root directories.
+        # Nested names can be real source packages, such as Android's work/.
+        if path.parts[0] in EXCLUDED_ROOTS or any(p in EXCLUDED_PARTS for p in path.parts) or path.suffix in EXCLUDED_SUFFIXES:
             continue
         if path.name.startswith('.env') and path.name != '.env.example':
             continue
