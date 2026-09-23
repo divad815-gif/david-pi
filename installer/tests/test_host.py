@@ -2,7 +2,10 @@
 import copy
 import hashlib
 import json
+import os
 from pathlib import Path
+import subprocess
+import sys
 import tarfile
 import time
 import uuid
@@ -78,6 +81,85 @@ def test_maintenance_state_is_not_owned_by_portal(controller):
     worker = controller.compose(cfg, IMAGE)["services"]["maintenance"]
     assert worker["user"] == "10002:10001"
     assert next(v for v in worker["volumes"] if v["target"] == "/data")["read_only"]
+
+
+def test_restrictive_helper_umask_preserves_worker_group_access(controller):
+    cfg = controller.config()
+    previous = os.umask(0o077)
+    try:
+        controller.create_data_directories(cfg)
+    finally:
+        os.umask(previous)
+    data = Path(cfg["storage"]["data_root"])
+    for relative in ("", ".david-pi-operations", "originals", "tmp", "tmp/uploads", "audiobooks", "audiobooks/incoming/streaming"):
+        assert (data / relative).stat().st_mode & 0o777 == 0o750
+    assert (data / ".david-pi-operations/maintenance").stat().st_mode & 0o777 == 0o700
+
+
+def test_same_installation_repairs_named_directories_without_changing_content(controller):
+    cfg = controller.config()
+    controller.create_data_directories(cfg)
+    data = Path(cfg["storage"]["data_root"])
+    (data / ".david-pi-storage").write_text(cfg["instance_id"] + "\n")
+    for directory in (data, *(p for p in data.rglob("*") if p.is_dir())):
+        directory.chmod(0o700)
+    album = data / "originals/private-album"
+    album.mkdir(mode=0o700)
+    content = album / "photo"
+    content.write_bytes(b"Household content remains private")
+    content.chmod(0o600)
+    original = {path: (path.stat().st_mode, path.stat().st_uid, path.stat().st_gid) for path in (data.parent, album, content, data / ".david-pi-operations/maintenance")}
+    controller.create_data_directories(cfg)
+    controller.create_data_directories(cfg)
+    assert data.stat().st_mode & 0o777 == 0o750
+    assert (data / ".david-pi-operations").stat().st_mode & 0o777 == 0o750
+    assert content.read_bytes() == b"Household content remains private"
+    assert {path: (path.stat().st_mode, path.stat().st_uid, path.stat().st_gid) for path in original} == original
+
+
+def test_directory_repair_refuses_foreign_installation_or_symlink(controller, tmp_path):
+    cfg = controller.config()
+    controller.create_data_directories(cfg)
+    data = Path(cfg["storage"]["data_root"])
+    marker = data / ".david-pi-storage"
+    marker.write_text(str(uuid.uuid4()))
+    data.chmod(0o700)
+    with pytest.raises(HostError, match="another installation"):
+        controller.create_data_directories(cfg)
+    assert data.stat().st_mode & 0o777 == 0o700
+    marker.write_text(cfg["instance_id"])
+    outside = tmp_path / "unrelated"
+    outside.mkdir(mode=0o700)
+    state = data / ".david-pi-operations/maintenance"
+    state.rmdir()
+    state.symlink_to(outside, target_is_directory=True)
+    with pytest.raises(HostError, match="symbolic link"):
+        controller.create_data_directories(cfg)
+    assert outside.stat().st_mode & 0o777 == 0o700
+
+
+@pytest.mark.skipif(os.geteuid() != 0, reason="Real worker identity checks require an isolated root test run")
+def test_worker_identities_can_traverse_managed_storage_but_portal_cannot_read_maintenance(controller):
+    cfg = controller.config()
+    previous = os.umask(0o077)
+    try:
+        controller.create_data_directories(cfg)
+    finally:
+        os.umask(previous)
+    data = Path(cfg["storage"]["data_root"])
+
+    def worker(uid, source):
+        def identity():
+            os.setgroups([])
+            os.setgid(10001)
+            os.setuid(uid)
+        return subprocess.run([sys.executable, "-c", source], cwd=data, preexec_fn=identity, capture_output=True, text=True)
+
+    maintenance = worker(10002, "from pathlib import Path; assert 'originals' in [p.name for p in Path('.').iterdir()]; Path('.david-pi-operations/maintenance/worker-state').write_text('private worker state')")
+    assert maintenance.returncode == 0, maintenance.stderr
+    portal = worker(10001, "from pathlib import Path; Path('originals/portal-content').write_text('portal works'); Path('.david-pi-operations/maintenance/worker-state').read_text()")
+    assert portal.returncode != 0 and "PermissionError" in portal.stderr
+    assert (data / "originals/portal-content").read_text() == "portal works"
 
 
 def test_disabled_module_files_are_preserved(controller):

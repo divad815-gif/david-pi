@@ -563,6 +563,36 @@ class Controller:
 
     def create_data_directories(self, cfg):
         data = Path(cfg["storage"]["data_root"])
+        marker = data / ".david-pi-storage"
+        established = marker.exists() or marker.is_symlink()
+        if established and (marker.is_symlink() or not marker.is_file() or marker.read_text().strip() != cfg["instance_id"]):
+            raise HostError("Existing storage belongs to another installation; use explicit recovery")
+
+        def managed_directory(path, uid, mode):
+            if path.is_symlink():
+                raise HostError("Managed storage contains a symbolic link")
+            created = not path.exists()
+            if created:
+                path.mkdir(mode=mode)
+            if not path.is_dir():
+                raise HostError("Managed storage directory is not a directory")
+            if not created and not established:
+                return
+            descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            try:
+                if created and os.geteuid() == 0:
+                    os.fchown(descriptor, uid, 10001)
+                metadata = os.fstat(descriptor)
+                expected = (uid, 10001) if os.geteuid() == 0 else (os.geteuid(), os.getegid())
+                if (metadata.st_uid, metadata.st_gid) != expected:
+                    raise HostError("Managed storage directory has unexpected ownership; use explicit recovery")
+                # The helper runs with UMask=0077. mkdir's mode is filtered by
+                # that mask; workers still need the intended group traversal.
+                # Repair only named directories belonging to this installation.
+                os.fchmod(descriptor, mode)
+            finally:
+                os.close(descriptor)
+
         folders = ["", "incoming", "tmp/uploads", "tmp/runtime", "quarantine", "platform", ".david-pi-operations"]
         for spec in selected_modules(cfg).values():
             folders.extend(spec.get("storage", ()))
@@ -574,12 +604,7 @@ class Controller:
             for component in reversed([path, *path.parents]):
                 if component != data and data not in component.parents:
                     continue
-                if component.is_symlink():
-                    raise HostError("Managed storage contains a symbolic link")
-                if not component.exists():
-                    component.mkdir(mode=0o750)
-                    if os.geteuid() == 0:
-                        os.chown(component, 10001, 10001)
+                managed_directory(component, 10001, 0o750)
         for spec in selected_substrates(cfg).values():
             for name in spec.get("databases", ()):
                 database = data / name
@@ -590,10 +615,7 @@ class Controller:
                     if os.geteuid() == 0:
                         os.chown(database, 10001, 10001)
         maintenance = data / ".david-pi-operations/maintenance"
-        if not maintenance.exists():
-            maintenance.mkdir(mode=0o700)
-            if os.geteuid() == 0:
-                os.chown(maintenance, 10002, 10001)
+        managed_directory(maintenance, 10002, 0o700)
 
     def storage_guard(self):
         cfg = self.config()
