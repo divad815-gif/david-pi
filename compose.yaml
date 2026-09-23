@@ -40,6 +40,7 @@ services:
       MOVIE_REGION: ${MOVIE_REGION:-US}
       DAVID_PI_FILES_DATA: /data/files
       DAVID_PI_AUDIOBOOKS_DATA: /data/audiobooks
+      DAVID_PI_AUDIOBOOK_PREPARE_MIN_FREE: &audiobook-min-free "1073741824"
       DAVID_PI_MYTUBE_DATA: /data/mytube
       DAVID_PI_AUDIOBOOK_DERIVATIVE_STATE: /data/.david-pi-operations/audiobook
       DAVID_PI_DATA_SENTINEL: /data/.david-pi-storage
@@ -194,7 +195,7 @@ services:
       DAVID_PI_DATA_SENTINEL: /run/david-pi-storage-sentinel
       DAVID_PI_DATA_ID: ${DAVID_PI_DATA_ID:-unconfigured}
       DAVID_PI_AUDIOBOOK_SEGMENT_SECONDS: "20"
-      DAVID_PI_AUDIOBOOK_PREPARE_MIN_FREE: "1073741824"
+      DAVID_PI_AUDIOBOOK_PREPARE_MIN_FREE: *audiobook-min-free
       DAVID_PI_AUDIOBOOK_PREPARE_MAX_TEMP: "75"
       DAVID_PI_AUDIOBOOK_PREPARE_MAX_LOAD: "3.0"
     mem_limit: 256m

@@ -832,6 +832,8 @@ class Controller:
             return {"type": "bind", "source": str(source), "target": target, "read_only": ro, "bind": {"create_host_path": False}}
         config = bind(self.config_path, "/etc/david-pi/installation.json", True)
         environment = {"DAVID_PI_CONFIG_FILE": "/etc/david-pi/installation.json", "DAVID_PI_ACCESS_MODE": "enforce", "DAVID_PI_DATA_SENTINEL": "/data/.david-pi-storage", "DAVID_PI_DATA_ID": cfg["instance_id"], "DAVID_PI_PLATFORM_DATA": "/data/platform", "DAVID_PI_FILES_DATA": "/data/files", "DAVID_PI_AUDIOBOOKS_DATA": "/data/audiobooks", "DAVID_PI_MYTUBE_DATA": "/data/mytube", "DAVID_PI_CHAT_DATA": "/data/chat", "DAVID_PI_ASSISTANT_DATA": "/data/platform/assistant", "DAVID_PI_PUBLIC_URL": cfg["public_url"], "DAVID_PI_INSTANCE_NAME": cfg["display_name"], "DAVID_PI_ALLOWED_HOSTS": urllib.parse.urlsplit(cfg["public_url"]).hostname + ",127.0.0.1,localhost", "MOVIE_REGION": cfg["country"], "TZ": cfg["timezone"], "DAVID_PI_DISABLE_METRICS": "1", "DAVID_PI_DISABLE_DEVICE_HOUSEKEEPING": "1", "ASSISTANT_WINDOWS_ENABLED": "false", "ASSISTANT_UBUNTU_BROKER_ENABLED": "false", "ASSISTANT_OPENCODE_ENABLED": "false", "DAVID_PI_SLIDESHOW_EXECUTOR_MODE": "queue", "TMPDIR": "/data/tmp/uploads"}
+        # Upload admission and derivative preparation must budget the same reserve.
+        environment["DAVID_PI_AUDIOBOOK_PREPARE_MIN_FREE"] = "1073741824"
         def service(memory=256, cpus="0.5"):
             return {"image": image, "restart": "unless-stopped", "user": "10001:10001", "volumes": [bind(data, "/data"), config], "environment": dict(environment), "cap_drop": ["ALL"], "security_opt": ["no-new-privileges:true"], "read_only": True, "tmpfs": ["/tmp:size=64m,mode=1777", "/run:size=16m,mode=0755"], "mem_limit": f"{memory}m", "pids_limit": 128, "cpus": cpus, "logging": {"driver": "local", "options": {"max-size": "10m", "max-file": "3"}}, "stop_grace_period": "45s"}
         portal = service(1536, "2.0")
@@ -857,7 +859,7 @@ class Controller:
             worker = service()
             worker.update(network_mode="none")
             worker["volumes"] = [config, bind(Path(data)/"audiobooks/originals", "/data/audiobooks/originals", True), bind(Path(data)/"audiobooks/streaming", "/data/audiobooks/streaming"), bind(Path(data)/"audiobooks/incoming/streaming", "/data/audiobooks/incoming/streaming"), bind(Path(data)/".david-pi-operations/audiobook", "/audiobook-state"), bind(Path(data)/".david-pi-storage", "/run/david-pi-storage-sentinel", True)]
-            worker["environment"].update(DAVID_PI_WORKER_MODE="audiobook", DAVID_PI_DATA_SENTINEL="/run/david-pi-storage-sentinel", DAVID_PI_AUDIOBOOK_DERIVATIVE_STATE="/audiobook-state", DAVID_PI_AUDIOBOOK_PREPARE_MIN_FREE="1073741824")
+            worker["environment"].update(DAVID_PI_WORKER_MODE="audiobook", DAVID_PI_DATA_SENTINEL="/run/david-pi-storage-sentinel", DAVID_PI_AUDIOBOOK_DERIVATIVE_STATE="/audiobook-state")
             services["audiobook-preparer"] = worker
         if "mytube-preparer" in workers:
             worker = service(1024, "1.0")

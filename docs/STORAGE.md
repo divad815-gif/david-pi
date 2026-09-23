@@ -33,6 +33,12 @@ libraries you plan to keep. Backup is either explicitly skipped or points to
 independent storage. The system disk is a valid choice only when it uses ext4
 and has sufficient room for both the operating system and your content.
 
+Leave room for processing as well as original files. Audiobook uploads and
+playback preparation keep at least **1 GiB free**, plus the estimated space for
+playback copies and temporary processing. If an import reports insufficient
+space, free space on the library drive before retrying; adding a backup drive
+does not increase the library's available space.
+
 ## If your drive is missing from the list
 
 1. Check it is attached to the server and powered on.

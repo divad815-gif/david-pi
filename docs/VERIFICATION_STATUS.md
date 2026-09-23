@@ -108,6 +108,16 @@ configurations validated. Public-source and credential checks screened the
 current tree, and the unpublished commit history was reviewed for new private
 content. These are source-publication checks, not stable-release receipts.
 
+Hosted checks then exposed build-environment assumptions: Android setup needed
+explicit supported SDK packages, Python needed module-based test invocation,
+and audiobook fixtures needed deterministic capacity instead of the runner's
+real disk. The corrected fixtures retain explicit low-space refusal tests.
+The portable portal and audiobook worker also now share the intended 1 GiB
+reserve; previously only the worker received that setting. Forecast tests
+verify acceptance on a small drive and rejection below the reserve plus
+derivative and temporary-processing requirements. Existing running systems
+were not changed. These fixes still require final installation acceptance.
+
 ## Still required for stable publication
 
 - Unmodified final-candidate installation through real Tailscale enrollment and

@@ -77,6 +77,26 @@ SNAPSHOT = {
 
 class PortalTestCase(unittest.TestCase):
     def setUp(self):
+        # These tiny audiobook fixtures model a volume with room for playback
+        # preparation, independently of the CI runner's real disk capacity.
+        # Keep the real capacity policy and let low-storage tests override this
+        # measurement; unrelated application paths still use their real disk.
+        real_disk_usage = shutil.disk_usage
+        audiobook_roots = {
+            os.fspath(audiobooks_module.ROOT),
+            os.fspath(audiobook_streaming_module.ROOT),
+        }
+
+        def fixture_disk_usage(path):
+            if os.fspath(path) in audiobook_roots:
+                return SimpleNamespace(
+                    total=500 * 1024**3, used=100 * 1024**3, free=400 * 1024**3
+                )
+            return real_disk_usage(path)
+
+        capacity = patch.object(shutil, "disk_usage", side_effect=fixture_disk_usage)
+        capacity.start()
+        self.addCleanup(capacity.stop)
         names = patch.object(assistant_module, "household_names", return_value={"david@example.test":"David", "diana@example.test":"Diana"})
         names.start()
         self.addCleanup(names.stop)
@@ -461,6 +481,29 @@ class PortalTestCase(unittest.TestCase):
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM audiobook_import_reservations").fetchone()[0],0)
         self.assertEqual(list(audiobooks_module.INCOMING.iterdir()),[])
         self.assertEqual(list(audiobooks_module.ORIGINALS.iterdir()),[])
+
+    def test_audiobook_upload_low_storage_refuses_before_publishing(self):
+        for free_bytes in (audiobooks_module.RESERVE - 1, audiobook_streaming_module.MIN_FREE_BYTES):
+            with self.subTest(free_bytes=free_bytes), patch.object(
+                audiobooks_module.shutil, "disk_usage",
+                return_value=SimpleNamespace(free=free_bytes),
+            ), patch.object(
+                audiobooks_module, "probe", return_value=({"title": "No room"}, 60.0, [])
+            ), patch.object(audiobooks_module, "cover", return_value=None):
+                response = self.client.post(
+                    "/api/audiobooks/upload",
+                    data={"visibility": "private", "books": (BytesIO(b"ID3" + b"l" * 2048), "low.mp3")},
+                    content_type="multipart/form-data", headers={"X-CSRF-Token": self.csrf},
+                )
+            self.assertEqual(response.status_code, 422)
+            self.assertIn("more free space", response.get_data(as_text=True))
+            with audiobooks_module.connect(audiobooks_module.DB_PATH) as connection:
+                self.assertEqual(connection.execute("SELECT COUNT(*) FROM audiobooks").fetchone()[0], 0)
+            with audiobook_streaming_module.queue_connection() as connection:
+                for table in ("audiobook_playback_jobs", "audiobook_catalog_snapshot", "audiobook_import_reservations"):
+                    self.assertEqual(connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0], 0)
+            self.assertEqual(list(audiobooks_module.INCOMING.iterdir()), [])
+            self.assertEqual(list(audiobooks_module.ORIGINALS.iterdir()), [])
 
     def test_audiobook_queue_commit_failure_rolls_back_uncommitted_import(self):
         with patch.object(

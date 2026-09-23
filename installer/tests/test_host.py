@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import subprocess
 import shlex
+import shutil
 import sys
 import tarfile
 import time
@@ -73,6 +74,50 @@ def test_compose_workers_follow_modules_and_share_immutable_image(controller):
     disabled = controller.compose(cfg, IMAGE)
     assert set(disabled["services"]) == {"portal", "mytube-preparer", "maintenance"}
     assert not controller.calls
+
+
+def test_portable_audiobook_services_share_reserve_and_keep_forecast_protection(controller, tmp_path):
+    services = controller.compose(controller.config(), IMAGE)["services"]
+    reserve_key = "DAVID_PI_AUDIOBOOK_PREPARE_MIN_FREE"
+    assert services["portal"]["environment"][reserve_key] == services["audiobook-preparer"]["environment"][reserve_key] == str(1024**3)
+    source = """
+import json
+from types import SimpleNamespace
+from unittest.mock import patch
+from modules import audiobook_streaming as streaming
+row = {"id": "a" * 32, "byte_size": 1024, "duration_seconds": 60}
+with patch.object(streaming.shutil, "disk_usage", return_value=SimpleNamespace(free=2 * 1024**3)):
+    forecast = streaming.storage_forecast([row])
+assert forecast["fits"]
+assert forecast["additional_bytes"] > 0
+assert forecast["staging_high_water_bytes"] > 0
+assert forecast["required_free_bytes"] == streaming.MIN_FREE_BYTES + forecast["additional_bytes"] + forecast["staging_high_water_bytes"]
+with patch.object(streaming.shutil, "disk_usage", return_value=SimpleNamespace(free=forecast["required_free_bytes"] - 1)):
+    assert not streaming.storage_forecast([row])["fits"]
+print(json.dumps(forecast))
+"""
+    forecasts = []
+    for name in ("portal", "audiobook-preparer"):
+        environment = {
+            **os.environ, **services[name]["environment"],
+            "DAVID_PI_AUDIOBOOKS_DATA": str(tmp_path / name / "audiobooks"),
+            "DAVID_PI_AUDIOBOOK_DERIVATIVE_STATE": str(tmp_path / name / "derivative-state"),
+        }
+        result = subprocess.run([sys.executable, "-c", source], cwd=Path(__file__).resolve().parents[2], env=environment, capture_output=True, text=True)
+        assert result.returncode == 0, result.stderr
+        forecasts.append(json.loads(result.stdout))
+    assert forecasts[0] == forecasts[1]
+
+
+@pytest.mark.skipif(shutil.which("docker") is None, reason="Reference Compose validation requires Docker Compose")
+def test_reference_compose_audiobook_reserve_matches_installer(controller):
+    result = subprocess.run(["docker", "compose", "--profile", "audiobooks", "config", "--format", "json"], cwd=Path(__file__).resolve().parents[2], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    reference = json.loads(result.stdout)["services"]
+    generated = controller.compose(controller.config(), IMAGE)["services"]
+    key = "DAVID_PI_AUDIOBOOK_PREPARE_MIN_FREE"
+    for reference_name, generated_name in (("photo-portal", "portal"), ("audiobook-preparer", "audiobook-preparer")):
+        assert reference[reference_name]["environment"][key] == generated[generated_name]["environment"][key]
 
 
 def test_maintenance_state_is_not_owned_by_portal(controller):
