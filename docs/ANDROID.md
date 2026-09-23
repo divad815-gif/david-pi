@@ -7,6 +7,16 @@ server. A new portable APK remains unpublished until signing continuity and
 real-device acceptance pass. Do not install a developer debug APK as an update
 to your household app.
 
+Before pairing, update **Android System WebView** and **Chrome** through your
+phone’s app store. Android uses its installed web component to show the portal;
+an old component can prevent Home, Media and other portal pages from opening.
+If David-Pi shows **Update your Android web component**, install those updates,
+then close and reopen David-Pi. **Open web component settings** identifies the
+component your phone uses; managed devices may require help from their
+administrator. Updating it does not require disconnecting the household or
+uninstalling David-Pi. Native backup and already saved offline books remain
+available while the portal needs this update.
+
 1. Install Tailscale on the Android device and sign in as your own admitted
    household identity. Open the server’s actual HTTPS address in a browser.
 2. Download the signed APK from the server’s verified download link or the

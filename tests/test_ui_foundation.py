@@ -330,8 +330,8 @@ def test_offline_shelf_also_loads_the_content_neutral_foundation():
     assert "/static/david-pi-ui.js?v=15" in source
     assert "/static/app.css?v=40" in worker
     assert "/static/david-pi-ui.js?v=15" in worker
-    assert "/static/platform.css?v=25" in source
-    assert "/static/platform.css?v=25" in worker
+    assert "/static/platform.css?v=26" in source
+    assert "/static/platform.css?v=26" in worker
     assert "/static/david-pi-ui.css?v=16" in source
     assert "/static/david-pi-ui.css?v=16" in worker
     assert "/static/theme-bootstrap.js?v=8" in source

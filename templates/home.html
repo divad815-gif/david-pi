@@ -18,7 +18,7 @@
   <link rel="icon" type="image/png" sizes="32x32" href="/david-pi-icon-32.png">
   <link rel="apple-touch-icon" sizes="180x180" href="/david-pi-icon-180.png">
   <link rel="stylesheet" href="/static/app.css?v=40">
-  <link rel="stylesheet" href="/static/home-dashboard.css?v=3">
+  <link rel="stylesheet" href="/static/home-dashboard.css?v=4">
   <link rel="stylesheet" href="/static/david-pi-ui.css?v=16">
 </head>
 <body class="home-page" data-recent-scope="{{ home_recent_scope }}">
@@ -83,6 +83,6 @@
   </main>
   <script src="/static/david-pi-ui.js?v=15" defer></script>
   <script src="/static/home.js?v=6" defer></script>
-  <script>if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js');</script>
+  <script src="/static/service-worker-registration.js?v=1" defer></script>
 </body>
 </html>

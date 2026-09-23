@@ -13,13 +13,13 @@
   <meta name="color-scheme" content="{{ davidpi_theme }}">
   <script src="/static/theme-bootstrap.js?v=8"></script>
   <title>Notes · {{ server_name }}</title>
-  <link rel="stylesheet" href="/static/app.css?v=40"><link rel="stylesheet" href="/static/platform.css?v=25"><link rel="stylesheet" href="/static/notes-files-reliability.css?v=1"><link rel="stylesheet" href="/static/david-pi-ui.css?v=16">
+  <link rel="stylesheet" href="/static/app.css?v=40"><link rel="stylesheet" href="/static/platform.css?v=26"><link rel="stylesheet" href="/static/notes-files-reliability.css?v=1"><link rel="stylesheet" href="/static/david-pi-ui.css?v=16">
 </head>
 <body class="module-page notes-page">
   <header class="module-bar"><a class="back" href="/" aria-label="Back home">&larr;</a><div><p>{{ server_name }}</p><h1>Notes</h1></div></header>
   <main class="module-shell">
     <section class="module-intro notes-intro"><div><p class="sheet-kicker">Ideas, lists, reminders</p><h2>Keep it together.</h2></div><button class="round-primary" id="newNote" type="button">+ New</button></section>
-    <label class="module-search"><span aria-hidden="true">⌕</span><input id="noteSearch" type="search" placeholder="Search notes" autocomplete="off"></label>
+    <label class="module-search"><span aria-hidden="true">⌕</span><input id="noteSearch" type="search" aria-label="Search notes" placeholder="Search notes" autocomplete="off"></label>
     {% if current_person.verified %}<p class="identity-note">Viewing as {{ current_person.name }}</p>{% endif %}
     <nav class="chip-nav" id="noteViews" aria-label="Note views">
       <button type="button" class="selected" data-view="all" aria-pressed="true">All</button><button type="button" data-view="mine" aria-pressed="false">Added by me</button><button type="button" data-view="pinned" aria-pressed="false">Pinned</button><button type="button" data-view="archived" aria-pressed="false">Archived</button><button type="button" data-view="deleted" aria-pressed="false">Recently Deleted</button>

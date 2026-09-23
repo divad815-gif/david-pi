@@ -1697,7 +1697,7 @@ class PortalTestCase(unittest.TestCase):
             worker.index("url.pathname.startsWith('/media/')"),
             worker.index("if(cacheKey)"),
         )
-        self.assertIn("david-pi-static-v44-portable-households", worker)
+        self.assertIn("david-pi-static-v45-portable-households", worker)
         self.assertIn("OFFLINE_AUDIOBOOK_PAGE", worker)
         self.assertNotIn("/api/audiobooks", worker.split("const SHELL =", 1)[1].split("];", 1)[0])
         self.assertNotIn("/media/", worker.split("const SHELL =", 1)[1].split("];", 1)[0])
@@ -1717,7 +1717,7 @@ class PortalTestCase(unittest.TestCase):
         self.assertIn('id="togetherTitle">Together</h3>', html)
         self.assertIn('id="systemTitle">System</h3>', html)
         self.assertEqual(html.count(" data-module>"), 13)
-        self.assertIn('/static/home-dashboard.css?v=3', html)
+        self.assertIn('/static/home-dashboard.css?v=4', html)
         self.assertIn('/static/home.js?v=6', html)
         self.assertIn('id="homeClearRecent"', html)
         self.assertIn('id="homeRecentStatus"', html)

@@ -1,4 +1,4 @@
-const CACHE = 'david-pi-static-v44-portable-households';
+const CACHE = 'david-pi-static-v45-portable-households';
 const OFFLINE_AUDIOBOOK_PAGE = '/static/audiobooks-offline.html';
 const AUDIOBOOK_PAGE = '/audiobooks';
 const OFFLINE_AUDIOBOOK_ROUTE = '/__davidpi_offline/audiobooks/';
@@ -9,7 +9,7 @@ const SHELL_REFRESH_TIMEOUT_MS = 4000;
 const SHELL = [
   '/david-pi-icon-192.png', '/david-pi-icon-512.png',
   OFFLINE_AUDIOBOOK_PAGE, '/static/installation.js?v=2',
-  '/static/app.css?v=40', '/static/platform.css?v=25', '/static/audiobooks-offline.css?v=7',
+  '/static/app.css?v=40', '/static/platform.css?v=26', '/static/audiobooks-offline.css?v=7',
   '/static/david-pi-ui.css?v=16', '/static/david-pi-ui.js?v=15', '/static/theme-bootstrap.js?v=8',
   '/static/audiobook-progress.js?v=4', '/static/audiobook-continuity.js?v=2', '/static/sha256-stream.js?v=1', '/static/audiobook-offline-web.js?v=10',
   '/static/audiobook-ui-safety.js?v=3', '/static/mobile-dialog-host.js?v=10', '/static/audiobook-shelf.css?v=6',

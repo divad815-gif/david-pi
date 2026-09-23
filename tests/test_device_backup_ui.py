@@ -16,7 +16,7 @@ class DeviceBackupUiContractTest(unittest.TestCase):
 
     def test_pairing_assets_are_cache_busted(self):
         template = (ROOT / "templates" / "device_backup.html").read_text(encoding="utf-8")
-        self.assertIn('/static/platform.css?v=25', template)
+        self.assertIn('/static/platform.css?v=26', template)
         self.assertIn('/static/device-backup.js?v=16', template)
 
     def test_pairing_copy_contract_uses_only_the_canonical_origin(self):

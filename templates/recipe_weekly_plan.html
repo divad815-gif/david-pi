@@ -12,7 +12,7 @@
   <meta name="color-scheme" content="{{ davidpi_theme }}">
   <script src="/static/theme-bootstrap.js?v=8"></script>
   <title>This week’s kitchen · {{ server_name }}</title>
-  <link rel="stylesheet" href="/static/app.css?v=40"><link rel="stylesheet" href="/static/platform.css?v=25"><link rel="stylesheet" href="/static/recipe-planner.css?v=3"><link rel="stylesheet" href="/static/recipe-navigation.css?v=1"><link rel="stylesheet" href="/static/david-pi-ui.css?v=16">
+  <link rel="stylesheet" href="/static/app.css?v=40"><link rel="stylesheet" href="/static/platform.css?v=26"><link rel="stylesheet" href="/static/recipe-planner.css?v=3"><link rel="stylesheet" href="/static/recipe-navigation.css?v=1"><link rel="stylesheet" href="/static/david-pi-ui.css?v=16">
 </head>
 <body class="module-page">
   <header class="module-bar"><a class="back" href="/recipes" aria-label="Back to recipes">&larr;</a><div><p>Recipes</p><h1>This week’s kitchen</h1></div></header>
@@ -31,7 +31,7 @@
       <details><summary>Removed / already have</summary><div id="plannerRemoved"></div></details>
     </section>
   </main>
-  <dialog class="small-sheet planner-picker" id="plannerPicker" aria-labelledby="plannerPickerHeading"><button class="close" id="plannerClose" type="button" aria-label="Close recipe selection">&times;</button><h2 id="plannerPickerHeading">Choose this week's recipes</h2><p>Shared recipes are available to both of you. Each recipe is included once.</p><label class="text-field">Search shared recipes<input id="plannerSearch" type="search" maxlength="100"></label><div id="plannerChoices"></div><p id="plannerPickerStatus" role="status"></p></dialog>
+  <dialog class="small-sheet planner-picker" id="plannerPicker" aria-labelledby="plannerPickerHeading"><button class="close" id="plannerClose" type="button" aria-label="Close recipe selection">&times;</button><h2 id="plannerPickerHeading">Choose this week's recipes</h2><p>Shared recipes are available to everyone in your household. Each recipe is included once.</p><label class="text-field">Search shared recipes<input id="plannerSearch" type="search" maxlength="100"></label><div id="plannerChoices"></div><p id="plannerPickerStatus" role="status"></p></dialog>
   <script src="/static/david-pi-ui.js?v=15" defer></script>
   <script src="/static/mobile-dialog-host.js?v=10" defer></script>
   <script src="/static/recipe-navigation.js?v=1" defer></script>

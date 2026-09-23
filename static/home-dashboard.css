@@ -16,11 +16,12 @@
 .home-recent-dismiss { align-self: stretch; min-width: 44px; min-height: 44px; padding: 0; color: rgba(255,255,255,.76); background: transparent; border: 0; border-left: 1px solid rgba(255,255,255,.1); font-size: 24px; line-height: 1; }
 .home-clear-recent:hover,.home-clear-recent:focus-visible { background: var(--accent-subtle); }.home-recent-dismiss:hover,.home-recent-dismiss:focus-visible { color: white; background: rgba(255,255,255,.1); }
 .home-directory-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
-.home-group { padding: 22px; background: rgba(255,255,255,.46); border: 1px solid var(--line); border-radius: 29px; }
+.home-group { min-width: 0; padding: 22px; background: rgba(255,255,255,.46); border: 1px solid var(--line); border-radius: 29px; }
 .home-group-library { grid-column: 1 / -1; }
 .home-group > header { margin: 0 2px 15px; }.home-group h3 { margin: 0 0 5px; font-family: Georgia, serif; font-size: 31px; font-weight: 500; }.home-group header p { margin: 0; color: var(--muted); font-size: 13px; }
 .home-group-library .actions { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-.home-group .action { min-height: 88px; padding: 14px 16px; box-shadow: 0 10px 28px rgba(75,53,34,.07); }
+.home-group .action { grid-template-columns: 54px minmax(0, 1fr) auto; min-height: 88px; padding: 14px 16px; box-shadow: 0 10px 28px rgba(75,53,34,.07); }
+.home-group .action > span { min-width: 0; overflow-wrap: anywhere; }
 .home-group .action-icon { width: 50px; height: 50px; border-radius: 16px; }.home-group .action strong { font-size: 18px; }.home-group .action small { line-height: 1.35; }
 @media (max-width: 760px) {
   .home-dashboard-shell { padding-left: 14px; padding-right: 14px; }
@@ -28,7 +29,7 @@
   .home-recent-heading { display: flex; }
   .home-recent-grid { margin-right: -14px; padding-right: 14px; }
   .home-recent-card { flex: 0 0 min(78vw, 270px); }
-  .home-directory-grid, .home-group-library .actions { grid-template-columns: 1fr; }
+  .home-directory-grid, .home-group-library .actions { grid-template-columns: minmax(0, 1fr); }
   .home-group-library { grid-column: auto; }.home-group { padding: 16px; border-radius: 24px; }
 }
 @media (prefers-reduced-motion: reduce) { .home-skip-link { transition: none; } }

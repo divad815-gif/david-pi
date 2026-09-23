@@ -141,8 +141,12 @@ class _AuditDeduper:
         return True
 
 
-def _denied_response():
-    message = "Open David-Pi through an approved private Tailscale account."
+def _denied_response(reason=None):
+    message = (
+        "Administrator access is required. Ask a household administrator to manage this server."
+        if reason == "admin_required"
+        else "Open David-Pi through an approved private Tailscale account."
+    )
     if request.path.startswith(("/api/", "/media/")):
         return jsonify(
             error={"code": "portal_access_denied", "message": message}
@@ -253,5 +257,5 @@ def init_access_control(app, mode: str | None = None, identity_provider=None) ->
                 )
 
         if effective_mode == "enforce" and not allowed:
-            return _denied_response()
+            return _denied_response(reason)
         return None

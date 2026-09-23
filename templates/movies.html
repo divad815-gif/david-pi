@@ -12,7 +12,7 @@
   <meta name="color-scheme" content="{{ davidpi_theme }}">
   <script src="/static/theme-bootstrap.js?v=8"></script>
   <title>Movie Night · {{ server_name }}</title>
-  <link rel="stylesheet" href="/static/app.css?v=40"><link rel="stylesheet" href="/static/platform.css?v=25"><link rel="stylesheet" href="/static/david-pi-ui.css?v=16">
+  <link rel="stylesheet" href="/static/app.css?v=40"><link rel="stylesheet" href="/static/platform.css?v=26"><link rel="stylesheet" href="/static/david-pi-ui.css?v=16">
 </head>
 <body class="module-page">
   <header class="module-bar"><a class="back" href="/" aria-label="Back home">&larr;</a><div><p>{{ server_name }}</p><h1>Movie Night</h1></div></header>
@@ -21,7 +21,7 @@
     <section class="module-intro"><div><p class="sheet-kicker">Our watchlist</p><h2>What sounds good?</h2><p id="availabilitySummary">See what’s ready on your services.</p></div><button type="button" class="round-primary" id="openMovieSearch">+ Add</button></section>
     {% if provider_mode == 'manual' %}<div class="module-notice">Movie Night works in manual mode now. Connect your own TMDB credential later for search, posters, and country-specific streaming availability.</div>{% endif %}
     <div class="movie-actions"><button type="button" id="pickMovie">Pick one for us</button><button type="button" {% if provider_mode == "manual" %}hidden disabled{% endif %} id="checkMovies">Check availability</button><button type="button" {% if provider_mode == "manual" %}hidden disabled{% endif %} id="openSubscriptions">My services</button></div>
-    <label class="module-search"><span aria-hidden="true">⌕</span><input id="watchlistSearch" type="search" placeholder="Search our watchlist"></label>
+    <label class="module-search"><span aria-hidden="true">⌕</span><input id="watchlistSearch" type="search" aria-label="Search our watchlist" placeholder="Search our watchlist"></label>
     <nav class="chip-nav" id="movieViews" aria-label="Watchlist views"><button type="button" class="selected" data-view="all" aria-pressed="true">Watchlist</button><button type="button" data-view="available" aria-pressed="false">Available now</button><button type="button" data-view="watched" aria-pressed="false">Watched</button><button type="button" data-view="mine" aria-pressed="false">Added by me</button>{% for member in household_members %}<button type="button" data-view="owner:{{ member.login }}" aria-pressed="false">Added by {{ member.name }}</button>{% endfor %}<button type="button" data-view="trash" aria-pressed="false">Trash</button></nav>
     <section id="moviesPanel" aria-busy="false">
       <p class="module-result-count" id="movieResultCount" hidden></p>

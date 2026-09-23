@@ -68,6 +68,21 @@ import org.json.JSONObject
 
 private const val TRUSTED_BRIDGE_NAME = "DavidPiNativeBridge"
 
+internal fun checkPortalWebView(
+    evaluate: (String, (String) -> Unit) -> Unit,
+    bridgeSupported: () -> Boolean,
+    ready: () -> Unit,
+    updateRequired: () -> Unit,
+) {
+    // Probe the actual engine on about:blank before loading household content.
+    // The outer script also parses in older engines, which report false safely.
+    evaluate("""(function(){try{return new Function("return globalThis && (({value:1})?.value ?? 0) === 1;")();}catch(error){return false;}})()""") { result ->
+        if (result == "true" && bridgeSupported()) ready() else updateRequired()
+    }
+}
+
+private enum class PortalWebViewState { CHECKING, READY, UPDATE_REQUIRED }
+
 private class TrustedPortalBridgeHandle(
     private val webView: WebView,
     private val script: androidx.webkit.ScriptHandler,
@@ -383,6 +398,7 @@ private fun PortalScreen(
     var webView by remember { mutableStateOf<WebView?>(null) }
     var mediaBridge by remember { mutableStateOf<NativeMediaBridge?>(null) }
     var trustedBridge by remember { mutableStateOf<TrustedPortalBridgeHandle?>(null) }
+    var compatibility by remember { mutableStateOf(PortalWebViewState.CHECKING) }
     var failed by remember { mutableStateOf(false) }
     var pendingFileCallback by remember { mutableStateOf<ValueCallback<Array<Uri>>?>(null) }
     val filePicker = rememberLauncherForActivityResult(
@@ -419,22 +435,6 @@ private fun PortalScreen(
             factory = { ctx ->
                 WebView(ctx).apply {
                     webView = this
-                    val nativeMedia = NativeMediaBridge(ctx, this)
-                    val nativePush = ChatPushBridge(this)
-                    val nativeOffline = OfflineAudiobookBridge(ctx)
-                    val installedBridge = installTrustedPortalBridge(
-                        this, nativeMedia, nativePush, nativeOffline
-                    )
-                    if (installedBridge != null) {
-                        trustedBridge = installedBridge
-                        mediaBridge = nativeMedia
-                    } else {
-                        // Older WebView implementations cannot provide a frame- and
-                        // origin-bound channel. Keep the portal usable without exposing
-                        // native capabilities through a process-wide JavaScript object.
-                        nativeMedia.release()
-                        nativeOffline.release()
-                    }
                     settings.javaScriptEnabled = true
                     settings.domStorageEnabled = true
                     // A lock-screen MediaSession callback is not a touchscreen
@@ -479,6 +479,7 @@ private fun PortalScreen(
                             url: String,
                             favicon: Bitmap?,
                         ) {
+                            if (compatibility == PortalWebViewState.CHECKING && url == "about:blank") return
                             if (DavidPiOrigin.canonicalPortalUrl(url) == null) {
                                 view.stopLoading()
                                 failed = true
@@ -488,6 +489,35 @@ private fun PortalScreen(
                         }
 
                         override fun onPageFinished(view: WebView, url: String) {
+                            if (compatibility == PortalWebViewState.CHECKING && url == "about:blank") {
+                                checkPortalWebView(
+                                    evaluate = { script, callback -> view.evaluateJavascript(script, callback) },
+                                    bridgeSupported = {
+                                        WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER) &&
+                                            WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)
+                                    },
+                                    ready = {
+                                        if (webView !== view) return@checkPortalWebView
+                                        val nativeMedia = NativeMediaBridge(ctx, view)
+                                        val nativeOffline = OfflineAudiobookBridge(ctx)
+                                        val installed = installTrustedPortalBridge(view, nativeMedia, ChatPushBridge(view), nativeOffline)
+                                        if (installed == null) {
+                                            nativeMedia.release()
+                                            nativeOffline.release()
+                                            compatibility = PortalWebViewState.UPDATE_REQUIRED
+                                        } else {
+                                            trustedBridge = installed
+                                            mediaBridge = nativeMedia
+                                            compatibility = PortalWebViewState.READY
+                                            view.loadUrl(target)
+                                        }
+                                    },
+                                    updateRequired = {
+                                        if (webView === view) compatibility = PortalWebViewState.UPDATE_REQUIRED
+                                    },
+                                )
+                                return
+                            }
                             if (DavidPiOrigin.canonicalPortalUrl(url) == null) {
                                 view.stopLoading()
                                 failed = true
@@ -542,19 +572,37 @@ private fun PortalScreen(
                         }
                     }
                     setDownloadListener(PortalDownloadListener(ctx))
-                    loadUrl(target)
+                    loadUrl("about:blank")
                 }
             },
             update = { view ->
                 // Only native tab changes should replace the current page. Internal portal
                 // navigation, dialogs, history, and form flows must be left alone.
-                if (appliedNavigationRequest != navigationRequest) {
+                if (compatibility == PortalWebViewState.READY && appliedNavigationRequest != navigationRequest) {
                     appliedNavigationRequest = navigationRequest
                     view.loadUrl(target)
                 }
             }
         )
-        if (failed) {
+        if (compatibility != PortalWebViewState.READY) {
+            Card(Modifier.fillMaxWidth().padding(20.dp)) {
+                Column(Modifier.padding(20.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    if (compatibility == PortalWebViewState.CHECKING) {
+                        Text("Opening your home…")
+                    } else {
+                        Text("Update your Android web component")
+                        Text("Update Android System WebView and Chrome in your phone’s app store, then close and reopen David-Pi. This web component cannot display your home with the features this app needs.")
+                        Text("Your pairing and saved data are kept. Backup and saved offline books remain available from the tabs below.")
+                        Button(onClick = {
+                            val provider = WebViewCompat.getCurrentWebViewPackage(context)?.packageName
+                            val intent = if (provider == null) Intent(Settings.ACTION_SETTINGS)
+                                else Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$provider"))
+                            runCatching { context.startActivity(intent) }
+                        }) { Text("Open web component settings") }
+                    }
+                }
+            }
+        } else if (failed) {
             Card(Modifier.fillMaxWidth().padding(20.dp)) {
                 Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text("${com.davidpi.backup.security.CredentialStore(context).displayName} is unavailable")

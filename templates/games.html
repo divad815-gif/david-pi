@@ -14,7 +14,7 @@
   <meta name="csrf-token" content="{{ csrf_token }}">
   <title>Games · {{ server_name }}</title>
   <link rel="stylesheet" href="/static/app.css?v=40">
-  <link rel="stylesheet" href="/static/platform.css?v=25">
+  <link rel="stylesheet" href="/static/platform.css?v=26">
   <link rel="stylesheet" href="/static/games.css?v=12">
   <link rel="stylesheet" href="/static/david-pi-ui.css?v=16">
 </head>
@@ -83,6 +83,6 @@
   <script src="/static/david-pi-ui.js?v=15" defer></script>
   <script src="/static/chess-engine.js?v=1" defer></script>
   <script src="/static/games.js?v=40" defer></script>
-  <script>if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js');</script>
+  <script src="/static/service-worker-registration.js?v=1" defer></script>
 </body>
 </html>
