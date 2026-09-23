@@ -6,6 +6,12 @@ source "$DP_ROOT/installer/lib/preflight.sh"
 
 # Prerequisites come only from the distribution and vendors' signed apt feeds.
 # No storage/SSH/DNS changes are made here.
+dp_public_repository_file() {
+  # apt verifies repository signatures as its unprivileged _apt user. Only
+  # these public vendor keys/source lists should bypass setup's private umask.
+  install -m 0644 /dev/stdin "$1"
+}
+
 dp_install_packages() {
   export DEBIAN_FRONTEND=noninteractive
   apt-get update
@@ -16,9 +22,8 @@ dp_install_packages() {
   arch="$(dpkg --print-architecture)"
   if ! command -v docker >/dev/null 2>&1; then
     install -m 0755 -d /etc/apt/keyrings
-    curl --fail --silent --show-error --proto '=https' --tlsv1.2 "https://download.docker.com/linux/${docker_os}/gpg" -o /etc/apt/keyrings/docker.asc
-    chmod 0644 /etc/apt/keyrings/docker.asc
-    printf 'deb [arch=%s signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/%s %s stable\n' "$arch" "$docker_os" "$codename" > /etc/apt/sources.list.d/docker.list
+    curl --fail --silent --show-error --proto '=https' --tlsv1.2 "https://download.docker.com/linux/${docker_os}/gpg" | dp_public_repository_file /etc/apt/keyrings/docker.asc
+    printf 'deb [arch=%s signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/%s %s stable\n' "$arch" "$docker_os" "$codename" | dp_public_repository_file /etc/apt/sources.list.d/docker.list
     apt-get update
     apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
   fi
@@ -26,8 +31,8 @@ dp_install_packages() {
   systemctl enable --now docker
   if ! command -v tailscale >/dev/null 2>&1; then
     tailscale_os="$docker_os"
-    curl --fail --silent --show-error --proto '=https' --tlsv1.2 "https://pkgs.tailscale.com/stable/${tailscale_os}/${codename}.noarmor.gpg" -o /usr/share/keyrings/tailscale-archive-keyring.gpg
-    curl --fail --silent --show-error --proto '=https' --tlsv1.2 "https://pkgs.tailscale.com/stable/${tailscale_os}/${codename}.tailscale-keyring.list" -o /etc/apt/sources.list.d/tailscale.list
+    curl --fail --silent --show-error --proto '=https' --tlsv1.2 "https://pkgs.tailscale.com/stable/${tailscale_os}/${codename}.noarmor.gpg" | dp_public_repository_file /usr/share/keyrings/tailscale-archive-keyring.gpg
+    curl --fail --silent --show-error --proto '=https' --tlsv1.2 "https://pkgs.tailscale.com/stable/${tailscale_os}/${codename}.tailscale-keyring.list" | dp_public_repository_file /etc/apt/sources.list.d/tailscale.list
     apt-get update
     apt-get install -y tailscale
   fi
