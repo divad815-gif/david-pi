@@ -3,7 +3,7 @@ set -eu
 
 HOST="${DAVID_PI_HOST:?Set DAVID_PI_HOST to the installed Tailscale DNS name}"
 TAIL_IP="$(tailscale ip -4 | head -n 1)"
-RESOLVE="--resolve $HOST:443:$TAIL_IP"
+RESOLVE="$HOST:443:$TAIL_IP"
 
 status() {
   label="$1"
@@ -14,11 +14,11 @@ status() {
 }
 
 status loopback_health http://127.0.0.1:8090/health
-status private_home "https://$HOST/" $RESOLVE
-status private_chat "https://$HOST/chat" $RESOLVE
-status chat_users "https://$HOST/api/chat/users" $RESOLVE
-status chat_conversations "https://$HOST/api/chat/conversations" $RESOLVE
-status vapid_endpoint "https://$HOST/api/chat/push/public-key" $RESOLVE
+status private_home "https://$HOST/" --resolve "$RESOLVE"
+status private_chat "https://$HOST/chat" --resolve "$RESOLVE"
+status chat_users "https://$HOST/api/chat/users" --resolve "$RESOLVE"
+status chat_conversations "https://$HOST/api/chat/conversations" --resolve "$RESOLVE"
+status vapid_endpoint "https://$HOST/api/chat/push/public-key" --resolve "$RESOLVE"
 
 if curl -sS --connect-timeout 2 -o /dev/null "http://${DAVID_PI_LAN_HOST:-127.0.0.1}:80/" 2>/dev/null; then
   echo lan_port_80=reachable
@@ -38,7 +38,7 @@ fi
 tailscale serve status | grep -q '127.0.0.1:8090' && echo tailscale_serve_loopback=pass
 tailscale funnel status | grep -q 'tailnet only' && echo tailscale_funnel=disabled
 
-VAPID_JSON="$(curl -k -sS $RESOLVE "https://$HOST/api/chat/push/public-key")"
+VAPID_JSON="$(curl -k -sS --resolve "$RESOLVE" "https://$HOST/api/chat/push/public-key")"
 python -c 'import json,sys; value=json.loads(sys.stdin.read()).get("public_key",""); assert len(value)>50' <<EOF
 $VAPID_JSON
 EOF
@@ -62,10 +62,10 @@ stat -c 'chat_root_mode=%a owner=%u:%g' /srv/data/family-photos/chat
 CHAT_KEY=/srv/compose/photo-portal/secrets/chat-master.key
 VAPID_KEY=/srv/compose/photo-portal/secrets/chat-vapid-private.pem
 for secret in "$CHAT_KEY" "$VAPID_KEY"; do
-  [ ! -L "$secret" ] && [ -f "$secret" ] || {
+  if [ -L "$secret" ] || [ ! -f "$secret" ]; then
     echo chat_secret_metadata=invalid >&2
     exit 1
-  }
+  fi
   [ "$(stat -Lc '%u:%g:%a:%h' "$secret")" = '0:10001:440:1' ] || {
     echo chat_secret_metadata=invalid >&2
     exit 1
@@ -90,7 +90,7 @@ load_pem_private_key(Path("/run/secrets/chat-vapid-private.pem").read_bytes(), p
 '
 echo chat_secret_container_access=pass
 
-[ "$(curl -k -sS $RESOLVE -o /dev/null -w '%{http_code}' "https://$HOST/api/chat/conversations")" = 200 ] || {
+[ "$(curl -k -sS --resolve "$RESOLVE" -o /dev/null -w '%{http_code}' "https://$HOST/api/chat/conversations")" = 200 ] || {
   echo chat_conversations=failed >&2
   exit 1
 }

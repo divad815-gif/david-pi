@@ -1,10 +1,14 @@
-# Verification status for the unpublished portable candidate
+# Verification status for the portable development candidate
 
 This is a working implementation record, not a stable-release receipt. Source
 continues to change. Only `docs/release-evidence/stable.json`, validated against
 the final exact source and APK, can satisfy publication gates.
 
-Completed during implementation:
+The implementation checks below were completed at earlier source revisions.
+They establish progress, not acceptance of every subsequent commit. The final
+release must repeat its required checks against the exact artifacts it publishes.
+
+## Implementation checks
 
 - The complete Python suite passed 1,238 tests and 409 subtests. Its single
   generic-host ABI skip is covered by explicit architecture image checks below.
@@ -55,10 +59,60 @@ Completed during implementation:
 - Exercised release provenance, publication-gate refusal, portable Compose,
   maintenance isolation and collector contracts with targeted automated tests.
 
-Still required for stable publication:
+## Assisted fresh-install walkthrough
 
-- Complete installation through real Tailscale enrollment and browser ownership
-  claim on both supported VM operating systems, including reboot and failures.
+A later walkthrough completed a fresh Debian 13 installation in a disposable
+full Linux VM. The user approved real Tailscale enrollment and completed the
+private HTTPS browser wizard. This exercised the following behavior:
+
+- Official prerequisite packages installed with signature verification enabled.
+- Setup used the hostname actually assigned by Tailscale, including a collision
+  suffix, and kept it independent from the chosen website display name.
+- `sudo david-pi setup` renewed the one-use claim without repeating installation
+  questions or changing the saved installation identity.
+- The user selected the timezone and detected prepared ext4 data/backup drives
+  showing available capacity. Storage discovery needed a correction during the
+  walkthrough to handle the setup service's isolated mount view.
+- The five-stage progress display reached ready, and the user opened the portal
+  with the chosen display name. The browser title and web-app manifest agreed.
+- All six selected services ran; all four declared Docker health checks passed.
+  The two preparers do not declare separate container health checks. The native
+  `sudo david-pi verify` check and authenticated HTTPS readiness checks passed.
+- Local modules worked with optional provider connections skipped. A separate
+  backup destination was configured and correctly reported **restore unverified**.
+
+This was assisted testing, not a clean acceptance pass for the final candidate.
+The installer and image began at `d83cec0`; helper correction `539c135` was applied
+during setup while preserving the existing claim session. Downloads used a
+private local HTTPS source and a verified local image export, so public GitHub
+and registry delivery were not tested. Software emulation required longer
+startup and healthcheck timeouts without disabling readiness checks.
+
+The subsequent source change `7323335` removes duplicate service startup during
+fresh installation. Its installer suite passed 170 tests with one root-only
+skip; that change still needs a new image and an unmodified fresh-install run.
+The working test server was left on its successfully verified configuration.
+
+## Source-publication checks
+
+Before opening the development pull request, the current full Python suite
+passed 1,319 tests and 409 subtests. Two checks were skipped because they require
+an architecture-specific release image or an isolated root test environment.
+The JavaScript suite passed 248 tests. Eight additional privacy-scanner tests
+passed after removing inherited household labels from the scanner's source.
+Personal denylist values now stay in an excluded local file.
+
+ShellCheck and shell syntax checks passed after correcting argument quoting
+and a conditional in the legacy chat verification script. Both Compose
+configurations validated. Public-source and credential checks screened the
+current tree, and the unpublished commit history was reviewed for new private
+content. These are source-publication checks, not stable-release receipts.
+
+## Still required for stable publication
+
+- Unmodified final-candidate installation through real Tailscale enrollment and
+  browser ownership claim on both supported VM operating systems, including
+  normal download delivery, reboot and failure scenarios.
 - Final exact-source AMD64 and ARM64 image/runtime verification and SBOMs.
 - Failed-update recovery and clean independent backup restoration with actual
   application content checks, including the final v9.22.2 release fixture.
@@ -68,6 +122,7 @@ Still required for stable publication:
 - Mobile/accessibility checks and a newcomer completing the published guide
   without undocumented assistance.
 
-No live deployment, image push, GitHub release or downloadable preview is
-claimed by this record. Local VM logs and private signing material are excluded
-from public artifacts.
+Publishing development source and a pull request does not satisfy these gates.
+No live deployment, published container image, GitHub package release or
+downloadable preview is claimed by this record. Local VM logs, account details,
+private addresses and signing material are excluded from public source.

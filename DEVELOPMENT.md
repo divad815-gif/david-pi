@@ -1,8 +1,10 @@
 # David-Pi development and release workflow
 
-The tracked source is the production-matching baseline for David-Pi. Runtime data,
-credentials, databases, generated Android output, and machine-local configuration
-must never be committed.
+The tracked source on this branch is the portable 10.0.0 development candidate.
+Source publication and CI success do not make it a released installer or deploy
+it to the existing live server. Stable publication follows [docs/RELEASE.md](docs/RELEASE.md).
+Runtime data, credentials, databases, generated Android output, and machine-local
+configuration must never be committed.
 
 ## Bootstrap
 
@@ -14,7 +16,7 @@ make test-fast
 The Android download is a signed release artifact, not a debug build. Release
 verification requires the policy-pinned Android SDK Build Tools 35.0.0 `aapt`
 and `apksigner` (selected from `ANDROID_SDK_ROOT`/`ANDROID_HOME`, or configured
-with `ANDROID_AAPT` and `ANDROID_APKSIGNER`). Its tracked attestation binds the APK hash, package
+with `ANDROID_AAPT` and `ANDROID_APKSIGNER`). Its release attestation binds the APK hash, package
 version, source version, and established signer fingerprint. If any differ,
 the portal does not advertise or serve the download and release verification
 fails closed.
@@ -50,18 +52,19 @@ FFmpeg is not installed on every workstation. `make test-media` builds the same
 Alpine 3.22/musl Python environment as production and runs the FFmpeg and
 race-safe audiobook-cleanup ABI tests inside the image.
 
-## Required release verification
+## Local candidate verification
 
 ```sh
 make verify IMAGE=david-family-photos:<candidate-tag>
 ```
 
-Verification performs a tracked-file secret scan, fast Python and JavaScript tests,
+`make verify` is a separate local candidate contract. It performs a tracked-file
+secret scan, fast Python and JavaScript tests,
 the containerized ffmpeg integration test, an OCI-labeled runtime image, a
 CycloneDX software bill of materials, a deterministic release manifest, and
 fixed-version Trivy dependency/image scans. The scan fails closed when Trivy or
 its package coverage is unavailable and blocks all `HIGH`/`CRITICAL` findings.
-A production candidate must additionally pass the identity, database-integrity,
+A candidate for the existing live server must additionally pass the identity, database-integrity,
 backup/restore, ARM64, browser, Android, and canary gates appropriate to its change.
 The stopped-container gate compares every application file under `/app`, the
 entrypoint content, and the effective user, command, working directory, ports,
@@ -78,18 +81,54 @@ credential signatures (including packaged APK entries). This is a release gate,
 not a mathematical proof that arbitrary bytes contain no secret; release
 evidence records that limitation explicitly.
 
-The `Verify release candidate` workflow runs the same `make verify` contract for
-every pull request and main-branch update in a clean hosted runner. It preserves the
-generated SBOM, release manifest, normalized scan, and raw scanner evidence for
-30 days. A green workflow is necessary but does not replace the Pi-specific
-recovery, identity, canary, and rollback gates.
+Household-specific privacy checks use a local file, never personal values
+embedded in the public scanner. Keep one private value per line in a protected
+file outside public source, then run:
 
-Production promotion additionally requires digest-only candidate, known-good,
-and verified base-image references. The complete non-deploying evidence contract,
-manual workflow, and exact rollback metadata are documented in
-[`deploy/RELEASE_PROMOTION.md`](deploy/RELEASE_PROMOTION.md).
+```sh
+python scripts/check-public-release.py --private-markers /protected/private-markers.txt
+```
 
-## Release rules
+The scanner refuses a marker file included in the public file set and reports
+matching source paths without echoing private values. CI runs its generic
+checks without that private file; maintainers must also screen their own private
+markers before publishing reconciled source.
+
+## Pull-request CI
+
+The [CI workflow](.github/workflows/ci.yml) runs on pull requests and pushes to
+`main`. Its three jobs currently perform:
+
+- Public-source and tracked-secret screening, ShellCheck and Bash syntax
+  checks, Python tests in `tests` and `installer/tests`, JavaScript tests
+  with Node.js 22, Compose configuration validation, a local Docker build, and
+  source-archive packaging on the runner.
+- Android debug unit tests and a debug APK build.
+- AMD64 and ARM64 image builds with `push: false` and cache-only output.
+
+CI does not run `make verify`, publish container images, or distribute the APK
+and source packages it builds. It does not upload the SBOM, release manifest,
+or Trivy evidence described by the local verification contract. Automatic
+Docker build-record uploads are explicitly disabled. A green CI run does not
+replace installation, recovery, physical-device, or newcomer acceptance.
+
+## Portable publication and legacy live-host promotion
+
+The portable stable package is governed by [docs/RELEASE.md](docs/RELEASE.md).
+Its manual workflow runs only on `main` and requires reviewed acceptance
+receipts matching the exact source and signed APK before publishing images or
+downloadable release assets. Local `make verify` results and pull-request CI
+do not authorize a preview or stable release. Configure the protected release
+environment and complete the documented gates before running that workflow.
+
+Updating the existing live David-Pi is a separate, rehearsed migration. The
+legacy live-host promotion procedure requires digest-only candidate, known-good,
+and verified base-image references. Its non-deploying evidence contract and
+exact rollback metadata remain documented in
+[`deploy/RELEASE_PROMOTION.md`](deploy/RELEASE_PROMOTION.md); they do not replace
+the portable package's publication gates.
+
+## Legacy live-host promotion rules
 
 - Build and deploy by immutable image digest, never by an unverified mutable tag.
 - Archive the SBOM, release manifest, vulnerability evidence (including raw scan
@@ -99,6 +138,8 @@ manual workflow, and exact rollback metadata are documented in
 - Schema work must be additive, checksummed, rehearsed on copies, and council-approved.
 - Never include `.env`, secret files, databases, uploads, or media in source archives.
 - Production smoke tests are read-only unless an approved disposable fixture exists.
+
+## Android toolchain verification
 
 Android's Gradle wrapper distribution is checksum-pinned. Release policy pins
 the `aapt` executable and its SDK `libc++.so` companion, plus both the
