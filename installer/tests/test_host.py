@@ -1,10 +1,12 @@
 """Behavioral installer checks run without Tailscale, Docker or household data."""
 import copy
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
 import subprocess
+import shlex
 import sys
 import tarfile
 import time
@@ -759,3 +761,92 @@ def test_install_progress_reports_readiness_before_opening_private_website(recon
     monkeypatch.setattr(controller, "readiness", readiness)
     perform()
     assert phases == ["preparing selected storage", "saving local keys and module settings", "starting selected services", "checking selected services", "opening your home server"]
+
+
+def fresh_install_with_unit(reconnect_host, monkeypatch, failure=None):
+    """Exercise real readiness and the shipped unit's startup command boundary."""
+    import installer.host as host
+    controller, serve, _, origin = reconnect_host
+    cfg, perform = configured_operation(reconnect_host, monkeypatch, "install")
+    serve["Web"][origin.removeprefix("https://") + ":443"]["Handlers"]["/"] = {"Proxy": "http://127.0.0.1:8091"}
+    unit = (Path(host.ROOT) / "installer/systemd/david-pi-portal.service").read_text()
+    unit_commands = [shlex.split(line.partition("=")[2]) for line in unit.splitlines() if line.startswith(("ExecStartPre=", "ExecStart="))]
+    starts = [command for command in unit_commands if Path(command[0]).name == "docker"]
+    assert len(starts) == 1 and "--wait" in starts[0] and "--remove-orphans" in starts[0]
+    assert "--wait-timeout" in starts[0] and "--no-block" not in starts[0]
+    assert any(command[-1] == "storage-guard" for command in unit_commands)
+    assert "Type=oneshot" in unit
+    events = []
+    original_runner = controller.runner
+    def runner(args, **kwargs):
+        if args == ["systemctl", "enable", "--now", "david-pi-portal.service"]:
+            events.append("unit-start")
+            assert controller.config_path.exists() and controller.compose_path.exists()
+            original_runner(args, **kwargs)
+            for command in unit_commands:
+                runner(command)
+            return ""
+        if Path(args[0]).name == "docker" and "up" in args:
+            events.append("compose-up")
+            if failure == "startup":
+                raise HostError("Selected services failed their unit startup checks")
+        if Path(args[0]).name == "docker" and "ps" in args:
+            events.append("service-readiness")
+            original_runner(args, **kwargs)
+            services = json.loads(controller.compose_path.read_text())["services"]
+            return json.dumps([{"Service": name, "State": "running", "Health": "unhealthy" if failure == "worker" and name == "maintenance" else "healthy"} for name in services])
+        if "--set-path=/" in args:
+            events.append("open-home")
+        return original_runner(args, **kwargs)
+    def application_ready(url, timeout):
+        assert url == "http://127.0.0.1:8090/ready"
+        events.append("application-readiness")
+        return io.BytesIO(json.dumps({"ok": failure != "application"}).encode())
+    controller.runner = runner
+    monkeypatch.setattr(controller, "readiness", host.Controller.readiness.__get__(controller))
+    monkeypatch.setattr(host.urllib.request, "urlopen", application_ready)
+    return controller, serve, cfg, perform, events
+
+
+def test_fresh_install_starts_once_through_unit_then_checks_readiness(reconnect_host, monkeypatch):
+    controller, serve, cfg, perform, events = fresh_install_with_unit(reconnect_host, monkeypatch)
+    assert perform()["public_url"] == cfg["public_url"]
+    assert events == ["unit-start", "compose-up", "service-readiness", "application-readiness", "open-home"]
+    assert not any(call[0] == "docker" and "up" in call for call in controller.calls)
+    assert json.loads((controller.state / "installed.json").read_text())["instance_id"] == cfg["instance_id"]
+    assert not (controller.state / "pending-install.json").exists()
+
+
+@pytest.mark.parametrize("failure", ["startup", "worker", "application"])
+def test_fresh_install_failure_preserves_recovery_state_without_restarting_or_opening(reconnect_host, monkeypatch, failure):
+    controller, serve, cfg, perform, events = fresh_install_with_unit(reconnect_host, monkeypatch, failure)
+    original_serve = copy.deepcopy(serve)
+    with pytest.raises(HostError):
+        perform()
+    assert events.count("unit-start") == events.count("compose-up") == 1
+    assert "open-home" not in events
+    if failure == "startup":
+        assert "service-readiness" not in events and "application-readiness" not in events
+    if failure == "worker":
+        assert "application-readiness" not in events
+    assert serve == original_serve
+    assert controller.config() == cfg
+    assert json.loads((controller.state / "pending-install.json").read_text()) == cfg
+    assert not (controller.state / "installed.json").exists()
+
+
+def test_fresh_install_never_restarts_an_existing_configuration(controller):
+    before = controller.config_path.read_bytes()
+    with pytest.raises(HostError, match="Already configured"):
+        controller.install({}, {"id": "f"*32})
+    assert controller.config_path.read_bytes() == before
+    assert not controller.calls
+
+
+def test_repair_still_deliberately_recreates_selected_services(reconnect_host, monkeypatch):
+    controller, _, _, _ = reconnect_host
+    _, perform = configured_operation(reconnect_host, monkeypatch, "repair")
+    perform()
+    starts = [call for call in controller.calls if call[0] == "docker" and "up" in call]
+    assert len(starts) == 1
+    assert "--force-recreate" in starts[0] and "--wait" in starts[0]

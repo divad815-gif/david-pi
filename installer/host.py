@@ -1389,8 +1389,9 @@ class Controller:
         self.write_runtime(cfg, self.release()["image"])
         self.phase(job, "starting selected services")
         self.runner(["systemctl", "enable", "--now", "david-pi-status.timer"])
+        # The oneshot unit starts Compose and waits for health. Recreating the
+        # same services here would discard that successful startup and repeat it.
         self.runner(["systemctl", "enable", "--now", "david-pi-portal.service"])
-        self.docker("up", "-d", "--remove-orphans", "--force-recreate", "--wait", "--wait-timeout", "180")
         self.phase(job, "checking selected services")
         self.readiness()
         self.phase(job, "opening your home server")
