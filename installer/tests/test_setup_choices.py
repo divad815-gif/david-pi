@@ -81,6 +81,71 @@ def test_discovery_omits_bind_aliases_and_unwritable_mounts(discovery, monkeypat
     assert [c["parent"] for c in controller.storage_choices()["choices"]] == ["/srv"]
 
 
+def test_systemd_mount_layers_preserve_choices_and_device_identity(discovery):
+    controller, mounts, _, _, calls = discovery
+    original = controller.storage_choices()["choices"]
+    mounts.extend({**mount, "options": "rw,nosuid,relatime"} for mount in copy.deepcopy(mounts))
+    writable_srv = {**mounts[0], "source": "/dev/vda1[/srv]", "target": "/srv", "fsroot": "/srv"}
+    mounts.append(writable_srv)
+    runner = controller.runner
+    def effective_namespace(args, **kwargs):
+        if args[0] == "findmnt" and "--target" in args and args[args.index("--target")+1].startswith("/srv"):
+            calls.append(args)
+            return json.dumps({"filesystems": [writable_srv]})
+        return runner(args, **kwargs)
+    controller.runner = effective_namespace
+    choices = controller.storage_choices()["choices"]
+    assert choices == original
+    # Provisioning needs the real block device too, not findmnt's [/srv] suffix.
+    inspected = controller.inspect_storage("/srv/david-pi-data")
+    assert inspected["source"] == "/dev/vda1" and inspected["target"] == "/"
+    cfg, selection = selected_configuration(choices)
+    controller.validate_storage_selection(cfg, selection)
+
+
+@pytest.mark.parametrize("changed", ["subfolder", "device", "uuid"])
+def test_system_folder_discovery_rejects_redirected_namespace_view(discovery, changed):
+    controller, mounts, _, _, calls = discovery
+    view = {**mounts[0], "source": "/dev/vda1[/srv]", "target": "/srv", "fsroot": "/srv"}
+    if changed == "subfolder": view.update(source="/dev/vda1[/other]", fsroot="/other")
+    elif changed == "device": view["source"] = "/dev/vdb[/srv]"
+    elif changed == "uuid": view["uuid"] = "replaced-filesystem"
+    runner = controller.runner
+    def effective_namespace(args, **kwargs):
+        if args[0] == "findmnt" and "--target" in args and args[args.index("--target")+1] == "/srv":
+            calls.append(args)
+            return json.dumps({"filesystems": [view]})
+        return runner(args, **kwargs)
+    controller.runner = effective_namespace
+    assert [c["parent"] for c in controller.storage_choices()["choices"]] == ["/mnt/backup", "/mnt/data"]
+
+
+def test_stacked_mounts_do_not_hide_a_distinct_bind_alias(discovery):
+    controller, mounts, _, _, _ = discovery
+    mounts.extend([{**mounts[1], "options": "rw,nosuid"}, {**mounts[1], "target": "/mnt/alias"}])
+    assert [c["parent"] for c in controller.storage_choices()["choices"]] == ["/mnt/backup", "/srv"]
+
+
+@pytest.mark.parametrize("replacement", ["device", "subfolder", "readonly"])
+def test_stacked_drive_rechecks_the_effective_namespace_mount(discovery, monkeypatch, replacement):
+    controller, mounts, _, _, calls = discovery
+    top = {**mounts[1], "options": "rw,nosuid"}
+    mounts.append(top)
+    if replacement == "device": top.update(source="/dev/vdc", uuid="backup-id")
+    elif replacement == "subfolder": top.update(source="/dev/vdb[/private]", fsroot="/private")
+    elif replacement == "readonly":
+        top["options"] = "ro,nosuid"
+        monkeypatch.setattr(host.os, "statvfs", lambda path: SimpleNamespace(f_flag=host.os.ST_RDONLY if str(path) == "/mnt/data" else 0))
+    runner = controller.runner
+    def effective_namespace(args, **kwargs):
+        if args[0] == "findmnt" and "--target" in args and args[args.index("--target")+1] == "/mnt/data":
+            calls.append(args)
+            return json.dumps({"filesystems": [top]})
+        return runner(args, **kwargs)
+    controller.runner = effective_namespace
+    assert not any(c["parent"] == "/mnt/data" for c in controller.storage_choices()["choices"])
+
+
 def test_discovery_rechecks_mount_under_candidate_path(discovery):
     controller, _, _, _, _ = discovery
     controller.inspect_storage = lambda folder: {"source": "/dev/surprise", "uuid": "changed", "target": str(folder)}

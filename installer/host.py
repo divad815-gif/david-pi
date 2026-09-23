@@ -564,11 +564,21 @@ class Controller:
 
     def inspect_storage(self, path):
         folder = safe_path(path)
-        info = json.loads(self.runner(["findmnt", "--json", "--target", str(folder), "--output", "SOURCE,FSTYPE,UUID,TARGET"]))["filesystems"][0]
+        info = json.loads(self.runner(["findmnt", "--json", "--target", str(folder), "--output", "SOURCE,FSTYPE,UUID,TARGET,FSROOT"]))["filesystems"][0]
         if info["fstype"] != "ext4":
             raise HostError("Initial releases support local ext4 storage only")
         if not info.get("uuid") or not info.get("source", "").startswith("/dev/"):
             raise HostError("Storage must be a mounted local ext4 filesystem")
+        # systemd's ReadWritePaths exposes /srv (and other writable folders)
+        # as same-path subdirectory mounts, e.g. /dev/vda1[/srv] at /srv.
+        # Resolve only that identity-preserving view of the system filesystem;
+        # a bind from another folder or device must not become a drive choice.
+        source = re.fullmatch(r"(/dev/[^\[\]]+)\[(/[^\[\]]*)\]", info["source"])
+        if source and info.get("fsroot") == info.get("target") == source.group(2):
+            root = json.loads(self.runner(["findmnt", "--json", "--target", "/", "--output", "SOURCE,FSTYPE,UUID,TARGET,FSROOT"]))["filesystems"][0]
+            if (root.get("target") == root.get("fsroot") == "/" and root.get("fstype") == "ext4"
+                    and root.get("source") == source.group(1) and root.get("uuid") == info["uuid"]):
+                info = {**info, "source": root["source"], "target": "/", "fsroot": "/"}
         return info
 
     def storage_devices(self):
@@ -598,22 +608,23 @@ class Controller:
         try:
             mounts = json.loads(self.runner(["findmnt", "--json", "--list", "--output", "SOURCE,FSTYPE,UUID,TARGET,OPTIONS,FSROOT,LABEL"]))["filesystems"]
             devices = self.storage_devices()
-            roots = [mount for mount in mounts if mount.get("target") == "/"]
-            system_device = devices.get(roots[0].get("source")) if len(roots) == 1 else None
-            # Multiple whole-filesystem mounts cannot be distinguished reliably
-            # from bind aliases. Do not offer them as separate drive choices.
-            counts = {}
+            roots = {(mount.get("source"), mount.get("uuid")) for mount in mounts if mount.get("target") == "/"}
+            system_device = devices.get(next(iter(roots))[0]) if len(roots) == 1 else None
+            # ReadWritePaths may stack whole-filesystem views at the SAME
+            # target. Count distinct paths: genuine aliases at different paths
+            # remain ambiguous and must not appear as separate drive choices.
+            targets = {}
             for mount in mounts:
                 key = (mount.get("source"), mount.get("uuid"))
                 if mount.get("fsroot") == "/":
-                    counts[key] = counts.get(key, 0) + 1
+                    targets.setdefault(key, set()).add(mount.get("target"))
             seen = set()
             for mount in mounts:
                 source, target = mount.get("source", ""), mount.get("target", "")
                 options = set(mount.get("options", "").split(","))
                 if (mount.get("fstype") != "ext4" or not mount.get("uuid") or source not in devices
                         or mount.get("fsroot") != "/" or "rw" not in options or options & {"ro", "bind", "rbind"}
-                        or counts[(source, mount["uuid"])] != 1):
+                        or len(targets[(source, mount["uuid"])]) != 1):
                     continue
                 parent, mode = ("/srv", "folder") if target == "/" else (target, "drive")
                 if mode == "drive" and any(c.isspace() for c in parent):
