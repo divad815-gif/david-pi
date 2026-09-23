@@ -17,6 +17,15 @@ a different browser account does not change the app. On Linux,
 `tailscale switch --list` marks the active account. Check this on your setup
 device as well as the server. See [account switching](TAILSCALE.md#already-using-tailscale-or-testing-in-a-separate-network).
 
+Typing an email into setup only selects the intended administrator. If you
+mistyped that address, renewing the claim code will keep the typo. Check the
+account printed in the server terminal and seek help reviewing the saved setup
+locally; do not delete configuration or keys to bypass the identity check.
+
+A warning about DNS port 53 does not block ordinary home-server setup. Your
+operating system may already provide a local DNS service. Leave it running;
+optional Pi-hole has its own deliberate [DNS setup](PIHOLE.md).
+
 ## HTTPS or claiming has not finished
 
 If setup requests certificates, use the Tailscale admin console's **DNS → HTTPS

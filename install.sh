@@ -55,7 +55,7 @@ chmod 0700 "$WORK"
 CURL=(curl --fail --location --silent --show-error --proto '=https' --tlsv1.2 --connect-timeout 15 --max-time 300)
 if [[ "$TEST_MODE" == 1 ]]; then CURL=(curl --fail --location --silent --show-error --connect-timeout 5 --max-time 30); fi
 
-say "Downloading release metadata from GitHub..."
+say "Downloading release metadata..."
 "${CURL[@]}" "$DOWNLOAD_BASE/release-manifest.txt" -o "$WORK/release-manifest.txt"
 (( $(wc -c < "$WORK/release-manifest.txt") <= 4096 )) || fail "release manifest is unexpectedly large"
 

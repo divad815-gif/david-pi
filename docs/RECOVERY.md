@@ -54,6 +54,19 @@ machine; it does not protect against disk failure. An incompatible migration
 cannot be undone by switching images alone. Automatic recovery must never
 replace newer household activity with older content. See [updates](UPDATES.md).
 
-`sudo david-pi uninstall-app` removes application services and preserves content
-by default. Keep backups and keys until you have verified a replacement. Erasing
-data is outside uninstall’s default behavior.
+To remove the running application, use the server terminal:
+
+```sh
+sudo david-pi uninstall-app
+```
+
+Type `REMOVE APP` to confirm. The command stops and disables David-Pi services
+and removes the application's containers. It preserves content, configuration,
+encryption keys, backups, downloaded images, the local management command and
+service files. Docker, Tailscale and Pi-hole are also retained; they may support
+other services on the machine.
+
+This is not a factory reset or a disk cleanup command. There is no automatic
+content-purge option. Keep backups and keys until you have verified a replacement;
+erasing household data requires a separate, deliberate decision. You do not need
+to reinstall the operating system for ordinary application maintenance.

@@ -57,12 +57,16 @@ dp_preflight() {
   fi
   for port in 53 443 8081 8090 8091; do
     if ss -ltnH 2>/dev/null | awk '{print $4}' | grep -Eq "(^|:)$port$"; then
-      echo "WARN: TCP port $port is already in use; setup will identify the owner before continuing"
+      if [[ "$port" == 53 ]]; then
+        echo "WARN: TCP DNS port 53 is in use. Home-server setup can continue; optional Pi-hole needs a separate DNS check."
+      else
+        echo "WARN: TCP port $port is already in use; setup will identify the owner before continuing"
+      fi
       warnings=$((warnings + 1))
     fi
   done
   if ss -lunH 2>/dev/null | awk '{print $5}' | grep -Eq '(^|:)53$'; then
-    echo "WARN: UDP port 53 is already in use; Pi-hole cannot start until the owner is resolved"
+    echo "WARN: UDP DNS port 53 is in use. Home-server setup can continue; optional Pi-hole needs a separate DNS check."
     warnings=$((warnings + 1))
   fi
   if [[ -f /var/run/reboot-required ]]; then

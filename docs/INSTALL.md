@@ -74,9 +74,17 @@ Answer its prompts with your exact Tailscale account login, your first name,
 and a suggested hostname such as `john-pi`. The hostname forms part of the web
 address; you choose the website's visible name later.
 
+The email **selects who may become administrator**. Typing it does not sign you
+in, create an account, or grant access. Tailscale authenticates the server in
+the next step. When you open the wizard, it verifies the Tailscale account of
+your browser's device and also requires the one-use claim code from the server
+terminal. Double-check the email: renewing a code keeps the saved account.
+
 If a Tailscale sign-in link appears, open it on your setup device, check the
 account/network shown, and approve **the server**. This link signs in the server
 even though you open it on a different device. It is not the portal link.
+If the browser is already signed in, Tailscale may show device approval without
+asking for your password again. Check the account before approving.
 
 Before the private wizard can open, enable HTTPS certificates in the Tailscale
 admin console. Follow the exact [HTTPS steps](TAILSCALE.md#3-enable-https-certificates),

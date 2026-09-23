@@ -47,6 +47,13 @@ Tailscale login. If the terminal prints a Tailscale login link, open it in the
 setup device's browser. Check the selected account and network before approving
 the server.
 
+Entering an email in the terminal selects the future administrator; it does
+not authenticate as that person. The sign-in link authenticates the server
+with Tailscale. An existing browser login may take you straight to device
+approval, so check the account shown. Later, the wizard checks your setup
+device's actual Tailscale identity and the terminal's one-use claim code.
+Signing into the Tailscale website does not switch the Tailscale app's account.
+
 **Checkpoint:** the [Machines page](https://console.tailscale.com/admin/machines)
 shows both the server and your setup device under the intended network. Existing
 Tailscale settings are inspected; setup does not reset an existing network.

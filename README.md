@@ -59,6 +59,19 @@ system's package manager first. [Read the complete installation guide](docs/INST
 for a terminal example, account and certificate checkpoints, inspection before
 execution, and what to do if setup pauses.
 
+## Remove the application
+
+On the server, run:
+
+```sh
+sudo david-pi uninstall-app
+```
+
+Type `REMOVE APP` when prompted. This stops and disables David-Pi services and
+removes its containers. Your content, configuration, keys, backups, Tailscale
+and Pi-hole stay in place. It does not erase the operating system or reset your
+household. See [what uninstall preserves](docs/RECOVERY.md#update-snapshots-and-uninstall).
+
 ## Guides
 
 - [Tailscale and private access](docs/TAILSCALE.md)

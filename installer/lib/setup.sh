@@ -78,7 +78,13 @@ dp_setup() {
     repository="${saved_release[1]}"
   fi
   [[ "$image" =~ ^ghcr\.io/[a-z0-9_.-]+/david-pi@sha256:[0-9a-f]{64}$ ]] || dp_die "Use a verified stable release installer; a pinned image digest is required"
-  if [[ -z "$admin" ]]; then read -r -p "Your exact Tailscale account login (usually email): " admin; fi
+  if [[ -z "$admin" ]]; then
+    printf '\nChoose who will administer this home server.\n'
+    echo "Entering an email selects the allowed account; it does not sign you in."
+    echo "Tailscale sign-in and server approval come after the prerequisite installation."
+    echo "Your browser device must use this Tailscale account to claim the server."
+    read -r -p "Administrator's exact Tailscale account email: " admin
+  fi
   if [[ -z "$hostname" ]]; then
     read -r -p "Your first name (for the suggested server hostname): " owner_name
     hostname="$(printf '%s' "$owner_name" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9' | cut -c1-50)-pi"

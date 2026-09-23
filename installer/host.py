@@ -59,6 +59,10 @@ class HostError(ValueError):
     pass
 
 
+class PrivateOriginChanged(HostError):
+    """A strict origin check failed; only unclaimed fresh setup may retry."""
+
+
 def atomic_json(path, value, mode=0o600):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -297,8 +301,8 @@ class Controller:
             raise HostError("The connected node needs an assigned Tailscale MagicDNS HTTPS address") from None
         if expected is not None and expected != origin:
             if not self.config_path.exists():
-                raise HostError(f"Tailscale address changed to {origin}. Restore the saved Tailscale account and hostname before resuming setup; a new claim does not approve an address change")
-            raise HostError(f"Tailscale address changed. Explicitly accept the actual address using sudo david-pi reconnect --accept-origin {origin}")
+                raise PrivateOriginChanged(f"Tailscale address changed to {origin}. Restore the saved Tailscale account and hostname before resuming setup; a new claim does not approve an address change")
+            raise PrivateOriginChanged(f"Tailscale address changed. Explicitly accept the actual address using sudo david-pi reconnect --accept-origin {origin}")
         return origin
 
     def inspect_private_root(self, origin):
@@ -1616,6 +1620,50 @@ def renew_claim(controller):
         print_setup_claim(origin, admin, token, renewed=True)
 
 
+def fresh_setup_private_root(controller, hostname, initial_status):
+    """Discover a completed rename before binding any installation identity.
+
+    `tailscale set` updates local preferences before the control plane assigns
+    DNS (including collision suffixes). Retrying that handoff is allowed only
+    inside fresh initialization, for the same node, owner and tailnet.
+    """
+    def context(status):
+        own = status.get("Self", {})
+        dns = own.get("DNSName", "").rstrip(".").lower()
+        return (own.get("ID"), own.get("UserID"), setup_node_account(status),
+                dns.partition(".")[2], status.get("CurrentTailnet", {}).get("Name"))
+
+    expected = context(initial_status)
+    for attempt in range(30):
+        if controller.config_path.exists() or (controller.state / "setup.json").exists():
+            raise HostError("Setup identity is already saved. Use sudo david-pi setup; fresh address discovery cannot replace an existing claim")
+        status = json.loads(controller.runner(["tailscale", "status", "--json"]))
+        if status.get("BackendState") != "Running" or context(status) != expected:
+            raise HostError("The Tailscale node, account or network changed during setup. Restore the original connection before retrying; no claim was issued")
+        origin = validate_origin("https://" + status.get("Self", {}).get("DNSName", "").rstrip(".").lower())
+        label = urllib.parse.urlsplit(origin).hostname.split(".")[0]
+        stem, separator, suffix = label.rpartition("-")
+        # Tailscale may truncate a maximal-length label to append its numeric
+        # collision suffix. Never accept the still-cached original OS hostname.
+        renamed = label == hostname or (separator and suffix.isdigit() and stem == hostname[:63-len(suffix)-1])
+        if renamed:
+            try:
+                before = controller.inspect_private_root(origin)
+                controller.set_private_root(origin, "http://127.0.0.1:8091", before)
+                final_status = json.loads(controller.runner(["tailscale", "status", "--json"]))
+                if final_status.get("BackendState") != "Running" or context(final_status) != expected:
+                    raise HostError("The Tailscale node, account or network changed during setup. Restore the original connection before retrying; no claim was issued")
+                controller.private_origin(origin)
+                return origin, final_status, before
+            except PrivateOriginChanged:
+                # No setup identity or token exists yet. Inspect and preserve
+                # Serve again using the newly assigned name on the next pass.
+                pass
+        if attempt < 29:
+            time.sleep(1)
+    raise HostError("Tailscale has not finished assigning the server's hostname. Wait for it to connect, then run sudo david-pi setup again; no claim was issued")
+
+
 def initialize(controller, admin, hostname, image, repository):
     if controller.config_path.exists():
         print("Already configured. Use the private website's administrator settings or sudo david-pi status.")
@@ -1641,30 +1689,30 @@ def initialize(controller, admin, hostname, image, repository):
         raise HostError("This Tailscale node already serves other content. Use its existing hostname to preserve those addresses")
     # Preserve all unrelated options by using `set`, never `up --reset`.
     controller.runner(["tailscale", "set", "--hostname", hostname])
-    origin = controller.private_origin()
-    dns = urllib.parse.urlsplit(origin).hostname
-    serve_state = controller.inspect_private_root(origin)
-    actual_hostname = dns.split(".")[0]
     print(f"\n2. Enable private HTTPS in your Tailscale network\n   Open https://console.tailscale.com/admin/dns using account {admin}.\n   Under HTTPS Certificates, choose Enable HTTPS and review the confirmation.\n   If certificates are already enabled, continue. Keep this terminal open.", flush=True)
     if sys.stdin.isatty():
         input("   Press Enter after HTTPS Certificates is enabled: ")
+    # The HTTPS checkpoint can take minutes. Resolve the assigned name only
+    # after it, and verify private Serve before saving an immutable claim.
+    print("\nChecking the assigned private address...", flush=True)
+    controller.runner(["systemctl", "enable", "david-pi-helper.service"])
+    controller.runner(["systemctl", "restart", "david-pi-helper.service"])
+    try:
+        origin, assigned_status, serve_state = fresh_setup_private_root(controller, hostname, status)
+    except HostError as error:
+        raise HostError(f"{error}. If HTTPS Certificates are not enabled, enable them at https://console.tailscale.com/admin/dns using {admin}. Then resume with sudo david-pi setup") from None
+    dns = urllib.parse.urlsplit(origin).hostname
+    actual_hostname = dns.split(".")[0]
     try:
         timezone = Path("/etc/timezone").read_text().strip()
     except FileNotFoundError:
         timezone = "UTC"
     setup = {"admin": admin.casefold(), "hostname": actual_hostname, "origin": f"https://{dns}", "instance_id": str(uuid.uuid4()), "timezone": timezone, "expires": 0, "claimed": False}
-    if account := setup_node_account(status):
+    if account := setup_node_account(assigned_status):
         setup["node_account"] = account
     atomic_json(controller.state / "setup.json", setup)
-    atomic_json(controller.state / "tailscale-serve.before.json", state)
+    atomic_json(controller.state / "tailscale-serve.before.json", serve_state)
     atomic_json(controller.etc / "release.json", {"version": (ROOT / "VERSION").read_text().strip(), "image": image, "repository": repository, "data_schema_version": 1, "rollback_min_data_schema": 1})
-    # systemd helper serves setup before application storage exists.
-    controller.runner(["systemctl", "enable", "david-pi-helper.service"])
-    controller.runner(["systemctl", "restart", "david-pi-helper.service"])
-    try:
-        controller.set_private_root(origin, "http://127.0.0.1:8091", serve_state)
-    except HostError as error:
-        raise HostError(f"{error}. If HTTPS Certificates are not enabled, enable them at https://console.tailscale.com/admin/dns using {admin}. Then resume with sudo david-pi setup") from None
     token = secrets.token_urlsafe(32)
     setup.update(expires=time.time()+900, token_hash=hashlib.sha256(token.encode()).hexdigest())
     atomic_json(controller.state / "setup.json", setup)
