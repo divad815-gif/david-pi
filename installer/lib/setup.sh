@@ -39,8 +39,7 @@ dp_setup() {
   umask 077
   install -d -m 0700 "$DP_ETC"
   touch "$DP_LOG"; chmod 0600 "$DP_LOG"
-  dp_preflight || dp_die "Preflight failed; no installation changes were made"
-  local admin='' hostname='' repository="${DAVID_PI_REPOSITORY:-divad815-gif/david-pi}" image="${DAVID_PI_IMAGE_OVERRIDE:-}" owner_name='' status
+  local admin='' hostname='' repository="${DAVID_PI_REPOSITORY:-divad815-gif/david-pi}" image="${DAVID_PI_IMAGE_OVERRIDE:-}" owner_name='' status supplied_options="$#"
   while (($#)); do
     case "$1" in
       --admin) admin="${2:-}"; shift 2 ;;
@@ -59,6 +58,12 @@ dp_setup() {
     python3 "$DP_ROOT/installer/host.py" --etc "$DP_ETC" address
     return
   fi
+  if [[ -f "$DP_ETC/host-state/setup.json" ]]; then
+    (( supplied_options == 0 )) || dp_die "Setup is already waiting to be claimed. Run sudo david-pi setup without options to renew its code and keep the saved account and address"
+    python3 "$DP_ROOT/installer/host.py" --etc "$DP_ETC" renew-claim
+    return
+  fi
+  dp_preflight || dp_die "Preflight failed; no installation changes were made"
   if [[ -z "$image" && -f "$DP_ETC/release.json" ]]; then
     local release_details
     local -a saved_release

@@ -76,6 +76,15 @@ If setup exited with an HTTPS error, run `sudo david-pi setup` again. Follow
 the private setup address it prints.
 This address is different from the Tailscale login and admin-console links.
 
+If the 15-minute claim code expires, run `sudo david-pi setup` in the server
+terminal. While setup is waiting to be completed, it reuses the saved account
+and hostname and prints the same private link with a fresh code. You do not
+repeat Tailscale sign-in or the account/name questions. The old code and browser
+session stop working, so refresh the wizard before pasting the new code.
+Tailscale confirms your network identity; the one-use code additionally proves
+access to the installation terminal. You only claim ownership during setup,
+not on ordinary visits to the finished portal.
+
 **Checkpoint:** the private HTTPS address opens the **Claim your server** page
 without a certificate warning. Continue in the [browser wizard](INSTALL.md#5-complete-the-browser-wizard).
 

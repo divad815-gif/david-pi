@@ -27,11 +27,29 @@ checkpoint. If setup has exited with an error, run `sudo david-pi setup` to resu
 See the [Tailscale guide](TAILSCALE.md#3-enable-https-certificates).
 
 If the claim token expired before it was used, run `sudo david-pi setup` on the
-server for a fresh token. Copy the newly printed token into **Claim your server**.
+server for a fresh token. The same command also renews an expired browser setup
+session before installation has begun. It prints the saved private link and a
+new 15-minute token directly: no repeated account/hostname questions and no
+package installation. Refresh the wizard, then copy the newly printed token
+into **Claim your server**. Previous codes and browser sessions are invalidated;
+unsaved browser entries may need to be entered again. The 15 minutes limits
+claiming ownership, not the full installation.
 Use the exact intended owner's Tailscale identity. The token is entered in a
 form, not appended to the address. Do not delete installation settings to fix
 an account mismatch. Once installation choices have been saved, setup resumes
 that installation instead of creating another household.
+
+If renewal reports that the server's account or address changed, switch the
+server's Tailscale app back to its original account and restore its original
+hostname, then retry. Changing the setup device's browser login will not fix
+the server's account. Renewal deliberately refuses to bind your saved setup
+to a replacement address. If the move was intentional, review the saved setup
+locally with support; do not delete configuration or manually replace its
+identity. For an already installed server use the documented
+[reconnect workflow](HOUSEHOLD.md).
+
+If another installation operation is running, let it finish. Renewing a code
+does not interrupt installation or restart services that are already running.
 
 ## Setup is slow, disconnected or failed
 

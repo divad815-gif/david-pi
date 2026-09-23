@@ -297,7 +297,7 @@ class Controller:
             raise HostError("The connected node needs an assigned Tailscale MagicDNS HTTPS address") from None
         if expected is not None and expected != origin:
             if not self.config_path.exists():
-                raise HostError(f"Tailscale address changed to {origin}. Run sudo david-pi setup again for a new private claim before installing")
+                raise HostError(f"Tailscale address changed to {origin}. Restore the saved Tailscale account and hostname before resuming setup; a new claim does not approve an address change")
             raise HostError(f"Tailscale address changed. Explicitly accept the actual address using sudo david-pi reconnect --accept-origin {origin}")
         return origin
 
@@ -454,6 +454,20 @@ class Controller:
             yield
         finally:
             fcntl.flock(descriptor, fcntl.LOCK_UN)
+            os.close(descriptor)
+
+    @contextlib.contextmanager
+    def setup_claim_lock(self):
+        # Shared by terminal renewal and browser writes, including install
+        # submission. A stale browser session cannot race a renewed token.
+        descriptor = os.open(self.state / "setup.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+        try:
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                raise HostError("Setup is being renewed or submitted. Wait for the terminal command to finish, then refresh the wizard") from None
+            yield
+        finally:
             os.close(descriptor)
 
     def enqueue(self, operation, payload):
@@ -1466,6 +1480,15 @@ class SetupHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         try:
+            with self.controller.setup_claim_lock():
+                self.setup_post()
+        except (HostError, ValueError, KeyError) as error:
+            self.send(400, {"error": str(error)})
+        except Exception:
+            self.send(500, {"error": "Setup could not finish this step; inspect the local helper log"})
+
+    def setup_post(self):
+        try:
             state = self.state()
             if self.headers.get("Origin") != state["origin"]:
                 raise HostError("Same-origin setup requests are required")
@@ -1529,11 +1552,77 @@ def serve(controller):
     web.serve_forever()
 
 
+def print_setup_claim(origin, admin, token, *, renewed=False):
+    if renewed:
+        print("\nYour setup claim has been renewed. Your saved account, hostname and installation identity are unchanged.\nThe previous code and browser session no longer work. Refresh the wizard and use this new code.\nIf you had not submitted the form, enter those browser choices again.")
+    print(f"\n3. Open your private setup wizard\n   {origin}/\n   Connect this browser's computer or phone to Tailscale using {admin}.\n   The link opens this server's setup wizard; it is different from the Tailscale sign-in link.\n\n4. Claim your home server\n   One-use claim token (valid 15 minutes):\n   {token}\n   Paste the token into the wizard. Keep it private; it never belongs in a URL.\n\nBookmark {origin}/ — this same link opens your home page after setup.\nFind this link again: sudo david-pi address\nIf the claim token expires: sudo david-pi setup\nKeep the server powered on while the wizard shows its installation progress.")
+
+
+def setup_node_account(status):
+    """Use the local daemon's node owner, never a browser-supplied identity."""
+    user_id = status.get("Self", {}).get("UserID")
+    user = status.get("User", {}).get(str(user_id), {})
+    login = user.get("LoginName", "")
+    return login.casefold() if isinstance(login, str) else ""
+
+
+def renew_claim(controller):
+    with controller.external_operation(), controller.setup_claim_lock():
+        if controller.config_path.exists() or (controller.state / "installed.json").exists():
+            raise HostError("Installation has already begun. Run sudo david-pi setup to resume its saved installation, or sudo david-pi status to review progress")
+        for path in controller.jobs.glob("*.json"):
+            if read_json(path, {}).get("state") in {"queued", "running"}:
+                raise HostError("An installation operation is still recorded as running. Use sudo david-pi status and wait for it to finish; no claim was changed")
+        try:
+            previous = read_json(controller.state / "setup.json")
+            if not isinstance(previous, dict):
+                raise ValueError()
+            admin, origin = previous["admin"], validate_origin(previous["origin"])
+            expected_account = previous.get("node_account", admin)
+            if not isinstance(expected_account, str) or not expected_account:
+                raise ValueError()
+            expected_account = expected_account.casefold()
+            if not isinstance(admin, str) or len(admin) > 254 or not re.fullmatch(r"[^\s@]+@[^\s@]+", admin):
+                raise ValueError()
+            if previous["hostname"] != urllib.parse.urlsplit(origin).hostname.split(".")[0]:
+                raise ValueError()
+            if str(uuid.UUID(previous["instance_id"])) != previous["instance_id"] or previous.get("timezone", "UTC") not in available_timezones():
+                raise ValueError()
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            raise HostError("Saved setup choices cannot be read safely. Inspect /etc/david-pi/host-state/setup.json locally or seek support; do not delete configuration to generate a new code") from None
+        saved_release_arguments(controller.etc)
+        actual_origin = controller.private_origin()
+        if actual_origin != origin:
+            raise HostError(f"The server's Tailscale address changed. The saved setup address is {origin}. Restore its original Tailscale account and hostname before retrying sudo david-pi setup. A deliberate move needs a reviewed setup recovery; renewal does not approve a replacement address")
+        status = json.loads(controller.runner(["tailscale", "status", "--json"]))
+        if not expected_account or setup_node_account(status) != expected_account:
+            raise HostError("The server's connected Tailscale account does not match saved setup. Switch the server back to its original account, then run sudo david-pi setup; no claim was changed")
+        serve_state = controller.inspect_private_root(origin)
+        # Keep a running helper and its sessions until all connection checks
+        # pass. Renewal does not restart it or reinstall prerequisites.
+        controller.runner(["systemctl", "enable", "--now", "david-pi-helper.service"])
+        controller.runner(["systemctl", "is-active", "--quiet", "david-pi-helper.service"])
+        try:
+            controller.set_private_root(origin, "http://127.0.0.1:8091", serve_state)
+        except HostError as error:
+            raise HostError(f"{error}. Confirm HTTPS Certificates are enabled at https://console.tailscale.com/admin/dns, then run sudo david-pi setup again; no new claim was issued") from None
+        current = json.loads(controller.runner(["tailscale", "status", "--json"]))
+        if setup_node_account(current) != expected_account or controller.private_origin() != origin:
+            raise HostError("Tailscale changed while renewing setup. Restore the saved account and address, then retry; no new claim was issued")
+        token = secrets.token_urlsafe(32)
+        renewed = {key: value for key, value in previous.items() if key not in {"token_hash", "expires", "claimed", "session_hash", "session_expires", "csrf"}}
+        renewed.update(token_hash=hashlib.sha256(token.encode()).hexdigest(), expires=time.time()+900, claimed=False)
+        atomic_json(controller.state / "setup.json", renewed)
+        print_setup_claim(origin, admin, token, renewed=True)
+
+
 def initialize(controller, admin, hostname, image, repository):
     if controller.config_path.exists():
         print("Already configured. Use the private website's administrator settings or sudo david-pi status.")
         print_address(controller.etc)
         return
+    if (controller.state / "setup.json").exists():
+        raise HostError("Setup choices are already saved. Run sudo david-pi setup without options to renew the existing claim")
     if not re.fullmatch(r"[^\s@]+@[^\s@]+", admin) or len(admin) > 254:
         raise HostError("Enter the exact Tailscale account login (usually an email address)")
     if not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", hostname):
@@ -1559,13 +1648,14 @@ def initialize(controller, admin, hostname, image, repository):
     print(f"\n2. Enable private HTTPS in your Tailscale network\n   Open https://console.tailscale.com/admin/dns using account {admin}.\n   Under HTTPS Certificates, choose Enable HTTPS and review the confirmation.\n   If certificates are already enabled, continue. Keep this terminal open.", flush=True)
     if sys.stdin.isatty():
         input("   Press Enter after HTTPS Certificates is enabled: ")
-    token = secrets.token_urlsafe(32)
-    previous = read_json(controller.state / "setup.json", {})
     try:
         timezone = Path("/etc/timezone").read_text().strip()
     except FileNotFoundError:
         timezone = "UTC"
-    atomic_json(controller.state / "setup.json", {"admin": admin.casefold(), "hostname": actual_hostname, "origin": f"https://{dns}", "instance_id": previous.get("instance_id", str(uuid.uuid4())), "timezone": timezone, "expires": time.time()+900, "token_hash": hashlib.sha256(token.encode()).hexdigest(), "claimed": False})
+    setup = {"admin": admin.casefold(), "hostname": actual_hostname, "origin": f"https://{dns}", "instance_id": str(uuid.uuid4()), "timezone": timezone, "expires": 0, "claimed": False}
+    if account := setup_node_account(status):
+        setup["node_account"] = account
+    atomic_json(controller.state / "setup.json", setup)
     atomic_json(controller.state / "tailscale-serve.before.json", state)
     atomic_json(controller.etc / "release.json", {"version": (ROOT / "VERSION").read_text().strip(), "image": image, "repository": repository, "data_schema_version": 1, "rollback_min_data_schema": 1})
     # systemd helper serves setup before application storage exists.
@@ -1575,7 +1665,10 @@ def initialize(controller, admin, hostname, image, repository):
         controller.set_private_root(origin, "http://127.0.0.1:8091", serve_state)
     except HostError as error:
         raise HostError(f"{error}. If HTTPS Certificates are not enabled, enable them at https://console.tailscale.com/admin/dns using {admin}. Then resume with sudo david-pi setup") from None
-    print(f"\n3. Open your private setup wizard\n   {origin}/\n   Connect this browser's computer or phone to Tailscale using {admin}.\n   The link opens this server's setup wizard; it is different from the Tailscale sign-in link.\n\n4. Claim your home server\n   One-use claim token (valid 15 minutes):\n   {token}\n   Paste the token into the wizard. Keep it private; it never belongs in a URL.\n\nBookmark {origin}/ — this same link opens your home page after setup.\nFind this link again: sudo david-pi address\nIf the claim token expires: sudo david-pi setup\nKeep the server powered on while the wizard shows its installation progress.")
+    token = secrets.token_urlsafe(32)
+    setup.update(expires=time.time()+900, token_hash=hashlib.sha256(token.encode()).hexdigest())
+    atomic_json(controller.state / "setup.json", setup)
+    print_setup_claim(origin, admin, token)
 
 
 def main():
@@ -1587,6 +1680,7 @@ def main():
     sub.add_parser("status")
     sub.add_parser("address")
     sub.add_parser("setup-release")
+    sub.add_parser("renew-claim")
     sub.add_parser("verify")
     sub.add_parser("pihole-summary")
     pihole = sub.add_parser("pihole-connect")
@@ -1619,6 +1713,8 @@ def main():
     elif args.command == "initialize":
         with controller.external_operation():
             initialize(controller, args.admin, args.hostname, args.image, args.repository)
+    elif args.command == "renew-claim":
+        renew_claim(controller)
     elif args.command == "storage-guard":
         controller.storage_guard()
     elif args.command == "verify":

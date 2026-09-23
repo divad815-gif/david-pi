@@ -191,6 +191,17 @@ server powered on and Tailscale connected on devices accessing it.
 
 Correct the specific disk, port, account or certificate issue before retrying.
 Run `sudo david-pi setup` on the server to resume; existing installation choices
-are preserved once saved. An expired unclaimed token requires this command to
-generate a new token. Refreshing an expired token does not renew it. Do not
-delete configuration or storage to start over. See [troubleshooting](TROUBLESHOOTING.md).
+are preserved once saved. Before installation has begun, this command prints a
+fresh 15-minute claim token and the same private link without asking for your
+account or hostname again or reinstalling packages. It keeps your installation
+identity and replaces the old token and browser session. Refresh the wizard,
+then paste the new token. Unsaved browser form entries may need to be entered
+again. The 15 minutes is the deadline to claim, not to finish installation.
+
+Renewal checks that the server still uses the saved Tailscale account and
+address. If either changed, restore the original connection before retrying;
+renewing a code does not approve moving the server. An installation already in
+progress is left running. After choices have been saved, the same command
+resumes that installation instead of creating a new claim. Refreshing an
+expired token in the browser alone does not renew it. Do not delete
+configuration or storage to start over. See [troubleshooting](TROUBLESHOOTING.md).
