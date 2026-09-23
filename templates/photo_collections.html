@@ -1,0 +1,42 @@
+{%- set davidpi_theme = 'dark' if request is defined and request.cookies.get('davidPiThemeV1') == 'dark' else 'light' -%}
+<!doctype html>
+<html lang="en" data-theme="{{ davidpi_theme }}">
+<head>
+  <meta name="server-name" content="{{ server_name }}">
+  <script type="application/json" id="installation-config">{{ public_installation|tojson }}</script>
+  <script src="/static/installation.js?v=2"></script>
+  <meta name="audiobook-progress-scope" content="{{ audiobook_progress_scope }}">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=auto">
+  <meta name="csrf-token" content="{{ csrf_token }}">
+  <meta name="theme-color" content="#fffaf2">
+  <meta name="color-scheme" content="{{ davidpi_theme }}">
+  <script src="/static/theme-bootstrap.js?v=8"></script>
+  <title>Collections · {{ server_name }}</title>
+  <link rel="stylesheet" href="/static/app.css?v=40">
+  <link rel="stylesheet" href="/static/media-gallery.css?v=16">
+  <link rel="stylesheet" href="/static/david-pi-ui.css?v=16">
+</head>
+<body>
+  <header class="photo-bar">
+    <a class="back" href="/photos" aria-label="Back to media">&larr;</a>
+    <div><p>{{ server_name }}</p><h1>Collections</h1></div>
+  </header>
+  <main class="collections-page">
+    {% if current_person.verified %}<p class="identity-note">Viewing as {{ current_person.name }}</p>{% endif %}
+    <div class="collections-page-heading">
+      <div><p class="sheet-kicker">Every album</p><h2>Choose a collection</h2></div>
+      <a class="collection-new" href="/photos">Open all media</a>
+    </div>
+    <p class="collections-page-status" id="collectionsPageStatus" role="status">Loading collections&hellip;</p>
+    <section class="collections-page-grid" id="collectionsPageGrid" aria-label="All visible photo collections" aria-busy="true"></section>
+    <section class="empty" id="collectionsPageError" hidden>
+      <h2>Collections are unavailable.</h2>
+      <p>Your media is unchanged. Try again when the connection is ready.</p>
+      <button class="secondary-button" id="retryCollections" type="button">Try again</button>
+    </section>
+  </main>
+  <script src="/static/david-pi-ui.js?v=15" defer></script>
+  <script src="/static/photo-collections.js?v=1" defer></script>
+</body>
+</html>

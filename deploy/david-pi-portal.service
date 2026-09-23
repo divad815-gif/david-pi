@@ -5,18 +5,19 @@ Wants=david-pi-pihole-summary.service david-pi-backup.service david-pi-server-st
 After=docker.service tailscaled.service srv-data.mount david-pi-pihole-summary.service david-pi-backup.service david-pi-server-status.service
 ConditionPathIsMountPoint=/srv/data
 ConditionPathExists=/srv/data/family-photos/.david-pi-storage
+ConditionPathIsDirectory=/srv/data/family-photos/audiobooks/originals
 ConditionPathExists=/run/david-pi/server-status.json
 
 [Service]
 Type=oneshot
 RemainAfterExit=yes
 WorkingDirectory=/srv/compose/photo-portal
-ExecStartPre=/bin/sh -c 'test "$(cat /srv/data/family-photos/.david-pi-storage)" = "david-pi-family-storage-v1"'
-ExecStart=/usr/bin/docker compose up -d --no-build
-ExecStartPost=/bin/sh -c 'for n in $(seq 1 45); do [ "$(docker inspect -f "{{if .State.Health}}{{.State.Health.Status}}{{end}}" family-photo-portal 2>/dev/null)" = healthy ] && exit 0; sleep 2; done; exit 1'
-ExecStartPost=/usr/bin/systemctl --no-block start david-pi-server-status.service
-ExecStop=/usr/bin/docker compose down
-TimeoutStartSec=120
+RuntimeDirectory=david-pi-writer-transition
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
+ExecStart=/usr/local/sbin/david-pi-portal-lifecycle start
+ExecStop=/usr/local/sbin/david-pi-portal-lifecycle stop
+TimeoutStartSec=180
 TimeoutStopSec=60
 
 [Install]

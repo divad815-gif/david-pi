@@ -1,13 +1,22 @@
+# Reference/development composition. Guided installation generates /etc/david-pi/compose.json from selected modules.
 services:
   photo-portal:
-    image: ${DAVID_PI_IMAGE:-david-pi:9.22.2}
+    image: ${DAVID_PI_IMAGE:-david-pi:development}
     container_name: family-photo-portal
-    restart: "no"
+    labels:
+      com.david-pi.access-mode: "${DAVID_PI_ACCESS_MODE:-enforce}"
+    restart: unless-stopped
     ports:
       - "127.0.0.1:8090:8000"
     volumes:
       - type: bind
-        source: /srv/data/family-photos
+        source: ${DAVID_PI_CONFIG_HOST_FILE:-/etc/david-pi/installation.json}
+        target: /etc/david-pi/installation.json
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${DAVID_PI_DATA_ROOT:-/srv/david-pi/data}
         target: /data
         bind:
           create_host_path: false
@@ -18,42 +27,34 @@ services:
         bind:
           create_host_path: false
       - type: bind
-        source: /run/david-pi-windows
-        target: /run/david-pi-windows
-        read_only: true
-        bind:
-          create_host_path: false
-      - type: bind
-        source: /srv/compose/photo-portal/secrets/chat-master.key
+        source: ${DAVID_PI_SECRETS_ROOT:-/etc/david-pi/secrets}/chat-master.key
         target: /run/secrets/chat-master.key
         read_only: true
         bind:
           create_host_path: false
     environment:
+      DAVID_PI_CONFIG_FILE: /etc/david-pi/installation.json
+      DAVID_PI_ACCESS_MODE: ${DAVID_PI_ACCESS_MODE:-enforce}
       DAVID_PI_PLATFORM_DATA: /data/platform
-      DAVID_PI_INSTANCE_NAME: ${DAVID_PI_INSTANCE_NAME:-David-Pi}
-      DAVID_PI_PLATFORM_PROFILE: ${DAVID_PI_PLATFORM_PROFILE:-linux-server}
       TMDB_API_READ_TOKEN: ${TMDB_API_READ_TOKEN:-}
       MOVIE_REGION: ${MOVIE_REGION:-US}
       DAVID_PI_FILES_DATA: /data/files
       DAVID_PI_AUDIOBOOKS_DATA: /data/audiobooks
+      DAVID_PI_MYTUBE_DATA: /data/mytube
+      DAVID_PI_AUDIOBOOK_DERIVATIVE_STATE: /data/.david-pi-operations/audiobook
       DAVID_PI_DATA_SENTINEL: /data/.david-pi-storage
-      DAVID_PI_DATA_ID: david-pi-family-storage-v1
+      DAVID_PI_DATA_ID: ${DAVID_PI_DATA_ID:-unconfigured}
       PIHOLE_SUMMARY: /run/david-pi/pihole-summary.json
       DAVID_PI_BACKUP_STATUS: /run/david-pi/backup-status.json
       DAVID_PI_SERVER_STATUS: /run/david-pi/server-status.json
+      DAVID_PI_HISTORY_METRICS_DB: /data/.david-pi-operations/maintenance/metrics.db
       DAVID_PI_ASSISTANT_DATA: /data/platform/assistant
-      DAVID_PI_WINDOWS_SOCKET: /run/david-pi-windows/windows-broker.sock
       DAVID_PI_CHAT_DATA: /data/chat
       DAVID_PI_CHAT_KEY_FILE: /run/secrets/chat-master.key
       DAVID_PI_VAPID_PUBLIC_KEY: ${DAVID_PI_VAPID_PUBLIC_KEY:-}
       DAVID_PI_VAPID_PRIVATE_KEY_FILE: ${DAVID_PI_VAPID_PRIVATE_KEY_FILE:-}
-      DAVID_PI_FCM_CREDENTIAL_FILE: ${DAVID_PI_FCM_CREDENTIAL_FILE:-}
-      IOS_SHORTCUT_ICLOUD_URL: ${IOS_SHORTCUT_ICLOUD_URL:-}
-      DAVID_PI_PUBLIC_URL: ${DAVID_PI_PUBLIC_URL:-https://localhost}
-      DAVID_PI_ALLOWED_HOSTS: ${DAVID_PI_ALLOWED_HOSTS:-127.0.0.1,localhost}
-      GIPHY_API_KEY: ${GIPHY_API_KEY:-}
-      ASSISTANT_WINDOWS_ENABLED: ${ASSISTANT_WINDOWS_ENABLED:-true}
+      # Fail closed until the external broker's coding_readonly enforcement has
+      # been independently exercised; the local bridge only labels the mode.
       ASSISTANT_UBUNTU_BROKER_ENABLED: "false"
       ASSISTANT_UBUNTU_CHAT_ENABLED: "false"
       ASSISTANT_UBUNTU_AGENT_ENABLED: "false"
@@ -65,12 +66,16 @@ services:
       DAVID_PI_BACKUP_MIN_FREE: ${DAVID_PI_BACKUP_MIN_FREE:-1073741824}
       DAVID_PI_SECONDARY_BACKUP_ROOT: ${DAVID_PI_SECONDARY_BACKUP_ROOT:-}
       DAVID_PI_SECONDARY_DATA_ID: ${DAVID_PI_SECONDARY_DATA_ID:-}
+      DAVID_PI_DISABLE_METRICS: "1"
+      DAVID_PI_DISABLE_DEVICE_HOUSEKEEPING: "1"
+      DAVID_PI_SLIDESHOW_EXECUTOR_MODE: queue
+      DAVID_PI_SLIDESHOW_QUEUE_LIMIT: "3"
       DAVID_PI_SHUTDOWN_PASSWORD_HASH_B64: ${DAVID_PI_SHUTDOWN_PASSWORD_HASH_B64:-}
       TMPDIR: /data/tmp/uploads
-    mem_limit: ${DAVID_PI_PORTAL_MEMORY:-1536m}
-    memswap_limit: ${DAVID_PI_PORTAL_MEMORY:-1536m}
-    pids_limit: ${DAVID_PI_PORTAL_PIDS:-256}
-    cpus: ${DAVID_PI_PORTAL_CPUS:-3.0}
+    mem_limit: 1536m
+    memswap_limit: 1536m
+    pids_limit: 256
+    cpus: 3.0
     cap_drop:
       - ALL
     security_opt:
@@ -92,29 +97,36 @@ services:
         max-file: "3"
     stop_grace_period: 30s
   chat-notifier:
-    image: ${DAVID_PI_IMAGE:-david-pi:9.22.2}
+    profiles: ["browser-push"]
+    image: ${DAVID_PI_IMAGE:-david-pi:development}
     container_name: david-pi-chat-notifier
     restart: unless-stopped
     command: ["python", "-m", "modules.chat_notify_worker"]
     volumes:
       - type: bind
-        source: /srv/data/family-photos
+        source: ${DAVID_PI_CONFIG_HOST_FILE:-/etc/david-pi/installation.json}
+        target: /etc/david-pi/installation.json
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${DAVID_PI_DATA_ROOT:-/srv/david-pi/data}
         target: /data
         bind:
           create_host_path: false
       - type: bind
-        source: /srv/compose/photo-portal/secrets/chat-vapid-private.pem
+        source: ${DAVID_PI_SECRETS_ROOT:-/etc/david-pi/secrets}/chat-vapid-private.pem
         target: /run/secrets/chat-vapid-private.pem
         read_only: true
         bind:
           create_host_path: false
     environment:
+      DAVID_PI_CONFIG_FILE: /etc/david-pi/installation.json
       DAVID_PI_PLATFORM_DATA: /data/platform
       DAVID_PI_DATA_SENTINEL: /data/.david-pi-storage
-      DAVID_PI_DATA_ID: david-pi-family-storage-v1
+      DAVID_PI_DATA_ID: ${DAVID_PI_DATA_ID:-unconfigured}
       DAVID_PI_VAPID_PRIVATE_KEY_FILE: /run/secrets/chat-vapid-private.pem
       DAVID_PI_VAPID_SUBJECT: ${DAVID_PI_PUBLIC_URL:-https://localhost}
-      DAVID_PI_FCM_CREDENTIAL_FILE: ${DAVID_PI_FCM_CREDENTIAL_FILE:-}
     mem_limit: 128m
     memswap_limit: 128m
     pids_limit: 64
@@ -134,29 +146,55 @@ services:
         max-file: "2"
     stop_grace_period: 10s
   audiobook-preparer:
-    image: ${DAVID_PI_IMAGE:-david-pi:9.22.2}
+    profiles: ["audiobooks"]
+    image: ${DAVID_PI_IMAGE:-david-pi:development}
     container_name: david-pi-audiobook-preparer
     restart: unless-stopped
+    network_mode: none
     command: ["python", "-m", "modules.audiobook_prepare_worker"]
     volumes:
       - type: bind
-        source: /srv/data/family-photos/audiobooks
-        target: /data/audiobooks
+        source: ${DAVID_PI_CONFIG_HOST_FILE:-/etc/david-pi/installation.json}
+        target: /etc/david-pi/installation.json
+        read_only: true
         bind:
           create_host_path: false
       - type: bind
-        source: /srv/data/family-photos/.david-pi-storage
+        source: ${DAVID_PI_DATA_ROOT:-/srv/david-pi/data}/audiobooks/originals
+        target: /data/audiobooks/originals
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${DAVID_PI_DATA_ROOT:-/srv/david-pi/data}/audiobooks/streaming
+        target: /data/audiobooks/streaming
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${DAVID_PI_DATA_ROOT:-/srv/david-pi/data}/audiobooks/incoming/streaming
+        target: /data/audiobooks/incoming/streaming
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${DAVID_PI_DATA_ROOT:-/srv/david-pi/data}/.david-pi-operations/audiobook
+        target: /audiobook-state
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${DAVID_PI_DATA_ROOT:-/srv/david-pi/data}/.david-pi-storage
         target: /run/david-pi-storage-sentinel
         read_only: true
         bind:
           create_host_path: false
     environment:
+      DAVID_PI_CONFIG_FILE: /etc/david-pi/installation.json
       DAVID_PI_WORKER_MODE: audiobook
       DAVID_PI_AUDIOBOOKS_DATA: /data/audiobooks
+      DAVID_PI_AUDIOBOOK_DERIVATIVE_STATE: /audiobook-state
       DAVID_PI_DATA_SENTINEL: /run/david-pi-storage-sentinel
-      DAVID_PI_DATA_ID: david-pi-family-storage-v1
+      DAVID_PI_DATA_ID: ${DAVID_PI_DATA_ID:-unconfigured}
       DAVID_PI_AUDIOBOOK_SEGMENT_SECONDS: "20"
-      DAVID_PI_AUDIOBOOK_PREPARE_MIN_FREE: "107374182400"
+      DAVID_PI_AUDIOBOOK_PREPARE_MIN_FREE: "1073741824"
       DAVID_PI_AUDIOBOOK_PREPARE_MAX_TEMP: "75"
       DAVID_PI_AUDIOBOOK_PREPARE_MAX_LOAD: "3.0"
     mem_limit: 256m
@@ -171,6 +209,299 @@ services:
     tmpfs:
       - /tmp:size=32m,mode=1777
       - /run:size=8m,mode=0755
+    logging:
+      driver: local
+      options:
+        max-size: 5m
+        max-file: "2"
+    stop_grace_period: 30s
+  mytube-preparer:
+    profiles: ["mytube-prepare"]
+    image: ${DAVID_PI_IMAGE:-david-pi:development}
+    container_name: david-pi-mytube-preparer
+    restart: "no"
+    network_mode: none
+    command: ["python", "-m", "modules.mytube_prepare_worker"]
+    volumes:
+      - type: bind
+        source: ${DAVID_PI_CONFIG_HOST_FILE:-/etc/david-pi/installation.json}
+        target: /etc/david-pi/installation.json
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${DAVID_PI_DATA_ROOT:-/srv/david-pi/data}/mytube
+        target: /data/mytube
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${DAVID_PI_DATA_ROOT:-/srv/david-pi/data}/platform
+        target: /data/platform
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${DAVID_PI_DATA_ROOT:-/srv/david-pi/data}/originals
+        target: /data/originals
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${DAVID_PI_DATA_ROOT:-/srv/david-pi/data}/photos.db
+        target: /data/photos.db
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${DAVID_PI_DATA_ROOT:-/srv/david-pi/data}/.david-pi-storage
+        target: /run/david-pi-storage-sentinel
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /proc
+        target: /host/proc
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /sys
+        target: /host/sys
+        read_only: true
+        bind:
+          create_host_path: false
+    environment:
+      DAVID_PI_CONFIG_FILE: /etc/david-pi/installation.json
+      DAVID_PI_WORKER_MODE: mytube
+      DAVID_PI_MYTUBE_DATA: /data/mytube
+      DAVID_PI_PLATFORM_DATA: /data/platform
+      DAVID_PI_MYTUBE_MEDIA_DB: /data/photos.db
+      DAVID_PI_MYTUBE_MEDIA_ORIGINALS: /data/originals
+      DAVID_PI_DATA_SENTINEL: /run/david-pi-storage-sentinel
+      DAVID_PI_DATA_ID: ${DAVID_PI_DATA_ID:-unconfigured}
+      DAVID_PI_MYTUBE_PREPARE_MIN_STORAGE: "1073741824"
+      DAVID_PI_MYTUBE_PREPARE_MAX_TEMP: "75"
+      DAVID_PI_MYTUBE_PREPARE_MAX_LOAD: "2.5"
+    mem_limit: 1024m
+    memswap_limit: 1536m
+    pids_limit: 128
+    cpus: 1.5
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp:size=96m,mode=1777
+      - /run:size=8m,mode=0755
+    logging:
+      driver: local
+      options:
+        max-size: 5m
+        max-file: "2"
+    stop_grace_period: 45s
+  david-pi-maintenance:
+    image: ${DAVID_PI_IMAGE:-david-pi:development}
+    container_name: david-pi-maintenance
+    restart: unless-stopped
+    command: ["python", "-m", "modules.maintenance_worker"]
+    user: "10002:10001"
+    network_mode: none
+    volumes:
+      - type: bind
+        source: ${DAVID_PI_CONFIG_HOST_FILE:-/etc/david-pi/installation.json}
+        target: /etc/david-pi/installation.json
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${DAVID_PI_DATA_ROOT:-/srv/david-pi/data}
+        target: /data
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${DAVID_PI_DATA_ROOT:-/srv/david-pi/data}/.david-pi-operations/maintenance
+        target: /maintenance-state
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /run/david-pi
+        target: /run/david-pi
+        read_only: true
+        bind:
+          create_host_path: false
+    environment:
+      DAVID_PI_CONFIG_FILE: /etc/david-pi/installation.json
+      DAVID_PI_WORKER_MODE: maintenance
+      DAVID_PI_DATA_SENTINEL: /data/.david-pi-storage
+      DAVID_PI_DATA_ID: ${DAVID_PI_DATA_ID:-unconfigured}
+      DAVID_PI_SERVER_STATUS: /run/david-pi/server-status.json
+      DAVID_PI_MAINTENANCE_UID: "10002"
+      DAVID_PI_MAINTENANCE_STATE: /maintenance-state
+      DAVID_PI_MAINTENANCE_ANCHOR: /data/.david-pi-operations/maintenance
+      DAVID_PI_MAINTENANCE_RUNTIME: /run/david-pi-maintenance
+      DAVID_PI_MAINTENANCE_METRICS_ENABLED: "1"
+      DAVID_PI_MAINTENANCE_HEARTBEAT_INTERVAL: "15"
+      DAVID_PI_MAINTENANCE_STATUS_INTERVAL: "900"
+      DAVID_PI_MAINTENANCE_PHOTO_RETENTION_MODE: "off"
+      DAVID_PI_MAINTENANCE_NOTE_RETENTION_MODE: "off"
+      DAVID_PI_MAINTENANCE_UPLOAD_PARTS_MODE: "off"
+    mem_limit: 96m
+    memswap_limit: 96m
+    pids_limit: 32
+    cpus: 0.20
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp:size=8m,mode=1777
+      - /run/david-pi-maintenance:size=2m,mode=0700,uid=10002,gid=10001
+    healthcheck:
+      test: ["CMD", "python", "-m", "modules.maintenance_worker", "--check-health"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: local
+      options:
+        max-size: 5m
+        max-file: "2"
+    stop_grace_period: 30s
+  device-backup-worker:
+    profiles: ["phone-backup"]
+    image: ${DAVID_PI_IMAGE:-david-pi:development}
+    container_name: david-pi-device-backup-worker
+    restart: unless-stopped
+    command: ["python", "-m", "modules.device_backup_worker"]
+    user: "10001:10001"
+    network_mode: none
+    depends_on:
+      photo-portal:
+        condition: service_healthy
+    volumes:
+      - type: bind
+        source: ${DAVID_PI_CONFIG_HOST_FILE:-/etc/david-pi/installation.json}
+        target: /etc/david-pi/installation.json
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${DAVID_PI_DATA_ROOT:-/srv/david-pi/data}
+        target: /data
+        bind:
+          create_host_path: false
+      # Configure DAVID_PI_SECONDARY_BACKUP_HOST_ROOT to a distinct mounted
+      # filesystem and DAVID_PI_SECONDARY_BACKUP_ROOT=/secondary together.
+      # The safe default is rejected as non-independent whenever secondary
+      # verification is enabled.
+      - type: bind
+        source: ${DAVID_PI_SECONDARY_BACKUP_HOST_ROOT:-/srv/david-pi/data}
+        target: /secondary
+        bind:
+          create_host_path: false
+    environment:
+      DAVID_PI_CONFIG_FILE: /etc/david-pi/installation.json
+      DAVID_PI_WORKER_MODE: device-backup
+      DAVID_PI_DATA_SENTINEL: /data/.david-pi-storage
+      DAVID_PI_DATA_ID: ${DAVID_PI_DATA_ID:-unconfigured}
+      DAVID_PI_DEVICE_BACKUP_RUNTIME: /run/david-pi-device-backup
+      DAVID_PI_DEVICE_BACKUP_INTERVAL: "60"
+      DAVID_PI_DEVICE_BACKUP_HEARTBEAT: "15"
+      DAVID_PI_DEVICE_BACKUP_SECONDARY_BATCH: "8"
+      DAVID_PI_SECONDARY_BACKUP_ROOT: ${DAVID_PI_SECONDARY_BACKUP_ROOT:-}
+      DAVID_PI_SECONDARY_DATA_ID: ${DAVID_PI_SECONDARY_DATA_ID:-}
+      DAVID_PI_DISABLE_DEVICE_HOUSEKEEPING: "1"
+    mem_limit: 192m
+    memswap_limit: 192m
+    pids_limit: 32
+    cpus: 0.35
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp:size=8m,mode=1777
+      - /run/david-pi-device-backup:size=2m,mode=0700,uid=10001,gid=10001
+    healthcheck:
+      test: ["CMD", "python", "-m", "modules.device_backup_worker", "--check-health"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: local
+      options:
+        max-size: 5m
+        max-file: "2"
+    stop_grace_period: 30s
+  slideshow-worker:
+    profiles: ["media"]
+    image: ${DAVID_PI_IMAGE:-david-pi:development}
+    container_name: david-pi-slideshow-worker
+    restart: unless-stopped
+    network_mode: none
+    depends_on:
+      photo-portal:
+        condition: service_healthy
+    command: ["python", "-m", "modules.slideshow_worker"]
+    user: "10001:10001"
+    volumes:
+      - type: bind
+        source: ${DAVID_PI_CONFIG_HOST_FILE:-/etc/david-pi/installation.json}
+        target: /etc/david-pi/installation.json
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${DAVID_PI_DATA_ROOT:-/srv/david-pi/data}
+        target: /data
+        bind:
+          create_host_path: false
+    environment:
+      DAVID_PI_CONFIG_FILE: /etc/david-pi/installation.json
+      DAVID_PI_WORKER_MODE: slideshow
+      DAVID_PI_SLIDESHOW_EXECUTOR_MODE: worker
+      DAVID_PI_SLIDESHOW_QUEUE_LIMIT: "3"
+      DAVID_PI_DISABLE_DEVICE_HOUSEKEEPING: "1"
+      DAVID_PI_PLATFORM_DATA: /data/platform
+      DAVID_PI_DATA_SENTINEL: /data/.david-pi-storage
+      DAVID_PI_DATA_ID: ${DAVID_PI_DATA_ID:-unconfigured}
+      DAVID_PI_SLIDESHOW_RUNTIME: /run/david-pi-slideshow
+      DAVID_PI_SLIDESHOW_LEASE_SECONDS: "300"
+      DAVID_PI_SLIDESHOW_RENEW_SECONDS: "30"
+      DAVID_PI_SLIDESHOW_POLL_SECONDS: "2"
+      DAVID_PI_SLIDESHOW_MAX_ATTEMPTS: "3"
+      DAVID_PI_SLIDESHOW_MIN_FREE: "1073741824"
+      DAVID_PI_SLIDESHOW_MAX_OUTPUT: "2147483648"
+      DAVID_PI_SLIDESHOW_MAX_RUNTIME: "14400"
+      DAVID_PI_SLIDESHOW_FFMPEG_TIMEOUT: "13800"
+      DAVID_PI_SLIDESHOW_FFPROBE_TIMEOUT: "60"
+      DAVID_PI_SLIDESHOW_TERMINATE_SECONDS: "10"
+      DAVID_PI_MEDIA_COMMAND_TIMEOUT: "900"
+      TMPDIR: /run/david-pi-slideshow
+      XDG_CACHE_HOME: /run/david-pi-slideshow
+    mem_limit: 768m
+    memswap_limit: 768m
+    pids_limit: 96
+    cpus: 1.5
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+      - /run/david-pi-slideshow:size=2m,mode=0700,uid=10001,gid=10001
+    healthcheck:
+      test: ["CMD", "python", "-m", "modules.slideshow_worker", "--check-health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
     logging:
       driver: local
       options:

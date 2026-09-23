@@ -1,67 +1,86 @@
+{%- set davidpi_theme = 'dark' if request is defined and request.cookies.get('davidPiThemeV1') == 'dark' else 'light' -%}
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="{{ davidpi_theme }}">
 <head>
+  <meta name="server-name" content="{{ server_name }}">
+  <script type="application/json" id="installation-config">{{ public_installation|tojson }}</script>
+  <script src="/static/installation.js?v=2"></script>
+  <meta name="audiobook-progress-scope" content="{{ audiobook_progress_scope }}">
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=auto">
   <meta name="csrf-token" content="{{ csrf_token }}">
+  <meta name="files-upload-scope" content="{{ files_upload_scope }}">
   <meta name="theme-color" content="#fffaf2">
-  <title>Files · David-Pi</title>
-  <link rel="stylesheet" href="/static/app.css?v=14">
-  <link rel="stylesheet" href="/static/platform.css?v=16">
+  <meta name="color-scheme" content="{{ davidpi_theme }}">
+  <script src="/static/theme-bootstrap.js?v=8"></script>
+  <title>Files · {{ server_name }}</title>
+  <link rel="stylesheet" href="/static/app.css?v=40">
+  <link rel="stylesheet" href="/static/platform.css?v=25">
+  <link rel="stylesheet" href="/static/notes-files-reliability.css?v=1">
+  <link rel="stylesheet" href="/static/david-pi-ui.css?v=16">
 </head>
 <body class="module-page">
   <header class="module-bar">
     <a class="back" href="/" aria-label="Back home">&larr;</a>
-    <div><p>David-Pi</p><h1>Files</h1></div>
-    <button class="round-primary compact-primary" id="openUpload">+ Add</button>
+    <div><p>{{ server_name }}</p><h1>Files</h1></div>
+    <button type="button" class="round-primary compact-primary" id="openUpload">+ Add</button>
   </header>
   <main class="module-shell files-shell">
     <section class="module-intro files-intro">
-      <div><p class="sheet-kicker">Saved at home</p><h2>Your files</h2><p>Documents and personal storage, without leaving David-Pi.</p></div>
-      <button id="newFolder">New folder</button>
+      <div><p class="sheet-kicker">Saved at home</p><h2>Your files</h2><p>Documents and personal storage, without leaving {{ server_name }}.</p></div>
+      <button type="button" id="newFolder">New folder</button>
     </section>
+    <details id="fileUploadActivity" class="module-notice" hidden><summary id="fileUploadSummary">Recent uploads</summary><div id="fileUploadStatuses" aria-live="polite"></div><p id="fileUploadCheckMessage" role="status"></p></details>
     <nav class="file-breadcrumbs" id="fileBreadcrumbs" aria-label="Folder path"></nav>
-    <label class="module-search"><span>&#8981;</span><input id="fileSearch" type="search" placeholder="Search this folder"></label>
+    <label class="module-search"><span aria-hidden="true">&#8981;</span><input id="fileSearch" type="search" placeholder="Search this folder" aria-label="Search this folder"></label>
     {% if current_person.verified %}<p class="identity-note">Viewing as {{ current_person.name }}</p>{% endif %}
     <nav class="chip-nav" id="fileOwners" aria-label="File ownership">
-      <button class="selected" data-owner="">All</button><button data-owner="mine">Added by me</button>
+      <button type="button" class="selected" data-owner="" aria-pressed="true">All</button><button type="button" data-owner="mine" aria-pressed="false">Added by me</button>
     </nav>
-    <nav class="chip-nav" id="fileKinds">
-      <button class="selected" data-kind="">All</button><button data-kind="pdf">PDFs</button>
-      <button data-kind="document">Documents</button><button data-kind="image">Images</button>
-      <button data-kind="text">Text</button><button data-kind="video">Video</button>
-      <button data-kind="audio">Audio</button><button data-view="deleted">Recently Deleted</button>
+    <nav class="chip-nav" id="fileKinds" aria-label="File types">
+      <button type="button" class="selected" data-kind="" aria-pressed="true">All</button><button type="button" data-kind="pdf" aria-pressed="false">PDFs</button>
+      <button type="button" data-kind="document" aria-pressed="false">Documents</button><button type="button" data-kind="image" aria-pressed="false">Images</button>
+      <button type="button" data-kind="text" aria-pressed="false">Text</button><button type="button" data-kind="video" aria-pressed="false">Video</button>
+      <button type="button" data-kind="audio" aria-pressed="false">Audio</button><button type="button" data-view="deleted" aria-pressed="false">Recently Deleted</button>
     </nav>
-    <section class="file-grid" id="fileGrid"></section>
+    <p class="files-load-state" id="filesLoading" role="status" aria-live="polite">Loading files…</p>
+    <section class="file-grid" id="fileGrid" aria-busy="true"></section>
+    <p class="module-result-count" id="fileResultCount" role="status" aria-live="polite" hidden></p>
+    <button type="button" class="load-more" id="loadMoreFiles" hidden>Load more files</button>
+    <section class="module-empty files-error" id="filesError" hidden role="alert">
+      <span aria-hidden="true">!</span><h2>Files couldn’t load.</h2><p id="filesErrorCopy">Check the connection to {{ server_name }} and try again.</p>
+      <button type="button" class="big-button" id="retryFiles">Try again</button>
+    </section>
     <section class="module-empty" id="filesEmpty" hidden>
-      <span>&#8962;</span><h2>Nothing here yet.</h2><p>Upload a document, photo, PDF, or anything else you want to keep.</p>
-      <button class="big-button" id="emptyAddFile">Add files</button>
+      <span aria-hidden="true">&#8962;</span><h2 id="filesEmptyTitle">Nothing here yet.</h2><p id="filesEmptyCopy">Upload a document, photo, PDF, or anything else you want to keep.</p>
+      <button type="button" class="big-button" id="emptyAddFile">Add files</button>
     </section>
   </main>
 
-  <dialog class="small-sheet file-upload-sheet" id="uploadSheet">
-    <button class="close" id="closeUpload">&times;</button><p class="sheet-kicker">Bring files home</p><h2>Add files</h2>
+  <dialog class="small-sheet file-upload-sheet" id="uploadSheet" aria-label="Add files">
+    <button type="button" class="close" id="closeUpload" aria-label="Close file upload">&times;</button><p class="sheet-kicker">Bring files home</p><h2>Add files</h2>
     <label class="file-drop" id="fileDrop"><input id="fileInput" type="file" multiple><span class="file-drop-plus" aria-hidden="true">+</span><strong>Choose files</strong><span>Several at once is fine</span></label>
     <label class="text-field">Who can see these files?<select id="fileVisibility"><option value="shared">Shared</option><option value="private">Only me</option></select></label>
     <div class="selected-files" id="selectedFiles"></div>
-    <button class="big-button" id="startFileUpload">Upload files</button><p class="upload-message" id="uploadMessage"></p>
+    <button type="button" class="big-button" id="startFileUpload">Upload files</button><p class="upload-message" id="uploadMessage" role="status" aria-live="polite"></p>
   </dialog>
-  <dialog class="small-sheet" id="folderSheet">
-    <button class="close" id="closeFolder">&times;</button><p class="sheet-kicker">Keep things tidy</p><h2>New folder</h2>
+  <dialog class="small-sheet" id="folderSheet" aria-label="New folder">
+    <button type="button" class="close" id="closeFolder" aria-label="Close new folder">&times;</button><p class="sheet-kicker">Keep things tidy</p><h2>New folder</h2>
     <label class="text-field">Folder name<input id="folderName" maxlength="120" autocomplete="off"></label>
-    <div class="dialog-actions"><button class="dialog-cancel" id="cancelFolder">Cancel</button><button class="big-button" id="createFolder">Create folder</button></div>
-    <p class="upload-message" id="folderMessage"></p>
+    <div class="dialog-actions"><button type="button" class="dialog-cancel" id="cancelFolder">Cancel</button><button type="button" class="big-button" id="createFolder">Create folder</button></div>
+    <p class="upload-message" id="folderMessage" role="status" aria-live="polite"></p>
   </dialog>
-  <dialog class="file-viewer" id="fileViewer">
-    <header><button id="closeFileViewer" aria-label="Close">&times;</button><strong id="viewerFileName"></strong><a id="viewerDownload" download>Download</a></header>
+  <dialog class="file-viewer" id="fileViewer" aria-labelledby="viewerFileName">
+    <header><button type="button" id="closeFileViewer" aria-label="Close">&times;</button><strong id="viewerFileName" aria-live="polite"></strong><a id="viewerDownload" download>Download</a></header>
     <div class="file-preview" id="filePreview"></div>
   </dialog>
-  <dialog class="confirm-sheet" id="fileConfirm">
+  <dialog class="confirm-sheet" id="fileConfirm" aria-labelledby="fileConfirmTitle" aria-describedby="fileConfirmCopy">
     <h2 id="fileConfirmTitle">Move this file?</h2><p id="fileConfirmCopy">You can restore it from Recently Deleted.</p>
-    <div class="confirm-actions"><button id="cancelFileAction">Cancel</button><button class="danger-button" id="acceptFileAction">Move to Recently Deleted</button></div>
+    <div class="confirm-actions"><button type="button" id="cancelFileAction">Cancel</button><button type="button" class="danger-button" id="acceptFileAction">Move to Recently Deleted</button></div>
   </dialog>
   <div class="toast" id="platformToast" hidden role="status"></div>
-  <script src="/static/mobile-dialog-host.js?v=7" defer></script>
-  <script src="/static/files.js?v=12" defer></script>
+  <script src="/static/david-pi-ui.js?v=15" defer></script>
+  <script src="/static/mobile-dialog-host.js?v=10" defer></script>
+  <script src="/static/files.js?v=16" defer></script>
 </body>
 </html>

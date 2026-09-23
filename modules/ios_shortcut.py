@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 import plistlib
-import os
 import uuid
 
 
-SERVER_URL = os.environ.get("DAVID_PI_PUBLIC_URL", "https://localhost").rstrip("/")
+SERVER_URL = "https://server.example-tail.ts.net"
 
 
 def _uuid() -> str:

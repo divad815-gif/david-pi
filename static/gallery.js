@@ -1,5 +1,18 @@
 const gallery = document.querySelector('#gallery');
 const emptyState = document.querySelector('#emptyState');
+const galleryStatus = document.querySelector('#galleryStatus');
+const gallerySkeleton = document.querySelector('#gallerySkeleton');
+const retryGallery = document.querySelector('#retryGallery');
+const retryGalleryPage = document.querySelector('#retryGalleryPage');
+const galleryPageError = document.querySelector('#galleryPageError');
+const galleryErrorTitle = document.querySelector('#galleryErrorTitle');
+const galleryErrorCopy = document.querySelector('#galleryErrorCopy');
+const galleryTitle = document.querySelector('#galleryTitle');
+const galleryEyebrow = document.querySelector('#galleryEyebrow');
+const galleryResultCount = document.querySelector('#galleryResultCount');
+const mediaFilters = document.querySelector('#mediaFilters');
+const mediaFilterSummary = document.querySelector('#mediaFilterSummary');
+const emptyBrowseAll = document.querySelector('#emptyBrowseAll');
 const loadMore = document.querySelector('#loadMore');
 const sheet = document.querySelector('#uploadSheet');
 const input = document.querySelector('#photoInput');
@@ -14,7 +27,24 @@ const viewerStage = document.querySelector('#viewerMediaStage');
 const viewerImage = document.querySelector('#viewerImage');
 const viewerVideo = document.querySelector('#viewerVideo');
 const viewerName = document.querySelector('#viewerName');
+const viewerCaptionText = document.querySelector('#viewerCaptionText');
+const viewerCaptionEditor = document.querySelector('#viewerCaptionEditor');
+const viewerCaption = document.querySelector('#viewerCaption');
+const viewerCaptionCount = document.querySelector('#viewerCaptionCount');
+const viewerCaptionStatus = document.querySelector('#viewerCaptionStatus');
+const viewerMeta = document.querySelector('#viewerMeta');
+const viewerDetails = document.querySelector('#viewerDetails');
+const viewerCaptionToggle = document.querySelector('#viewerCaptionToggle');
+const viewerCaptionToggleLabel = document.querySelector('#viewerCaptionToggleLabel');
+const viewerCaptionBadge = document.querySelector('#viewerCaptionBadge');
+const viewerCaptionPreview = document.querySelector('#viewerCaptionPreview');
+const viewerFavorite = document.querySelector('#viewerFavorite');
 const downloadOriginal = document.querySelector('#downloadOriginal');
+const viewerZoomControls = document.querySelector('#viewerZoomControls');
+const viewerZoomOut = document.querySelector('#viewerZoomOut');
+const viewerZoomIn = document.querySelector('#viewerZoomIn');
+const viewerZoomReset = document.querySelector('#viewerZoomReset');
+const viewerZoomLevel = document.querySelector('#viewerZoomLevel');
 const collectionRail = document.querySelector('#collectionRail');
 const collectionToolbar = document.querySelector('#collectionToolbar');
 const collectionEditor = document.querySelector('#collectionEditor');
@@ -30,6 +60,7 @@ const serverOrganizerCatalog = [...collectionChecks.querySelectorAll('.server-co
   .map((label) => ({
     id: String(label.dataset.collectionId || label.querySelector('input')?.dataset.collectionId || ''),
     name: label.querySelector('span')?.textContent?.trim() || '',
+    version: Number(label.dataset.collectionVersion || 0),
   }))
   .filter((collection) => collection.id && collection.name);
 const organizeMessage = document.querySelector('#organizeMessage');
@@ -38,6 +69,7 @@ const photoToast = document.querySelector('#photoToast');
 const timelineYears = document.querySelector('#timelineYears');
 const timelineMonths = document.querySelector('#timelineMonths');
 const timelineSummary = document.querySelector('#timelineSummary');
+const mediaTimeline = document.querySelector('#mediaTimeline');
 const confirmSheet = document.querySelector('#confirmSheet');
 const slideshowSheet = document.querySelector('#slideshowSheet');
 const slideshowCollection = document.querySelector('#slideshowCollection');
@@ -47,12 +79,18 @@ const slideshowProgressBar = slideshowProgress.querySelector('span');
 const slideshowMusic = document.querySelector('#slideshowMusic');
 const slideshowMusicPreview = document.querySelector('#slideshowMusicPreview');
 const slideshowMusicCredit = document.querySelector('#slideshowMusicCredit');
+const gridZoomOut = document.querySelector('#gridZoomOut');
+const gridZoomIn = document.querySelector('#gridZoomIn');
+const gridDensityLabel = document.querySelector('#gridDensityLabel');
+const gridDensityMode = document.querySelector('#gridDensityMode');
 let slideshowMusicTracks = [];
+let slideshowCollections = [];
 let nextCursor = null;
 let hasMorePhotos = true;
 let loadingPhotos = false;
-const pageSize = 30;
 let loadedPhotos = [];
+let loadedPhotoIds = new Set();
+let gallerySeenCursors = new Set();
 let totalPhotos = 0;
 let deletedPhotoTotal = 0;
 let currentPhotoIndex = -1;
@@ -62,27 +100,107 @@ const viewerPreviewCacheLimit = 8;
 let touchStartX = null;
 let touchStartY = null;
 let touchSwipeActive = false;
-let zoom = 1, panX = 0, panY = 0, pinchDistance = 0, pinchZoom = 1;
+let zoom = 1, panX = 0, panY = 0, pinchDistance = 0;
 let panStartX = 0, panStartY = 0, panOriginX = 0, panOriginY = 0, pinchActive = false;
+let viewerRenditionRank = 0;
+let viewerRenditionTimer = null;
+let lastViewerTapAt = 0;
+let pointerPanId = null;
+const viewerTouchPointers = new Map();
+let viewerGesturePinched = false;
+let viewerPinchCenter = null;
+
+function activeViewerPhoto() {
+  return loadedPhotos[currentPhotoIndex] || null;
+}
+
+function updateViewerZoomControls() {
+  const percent = Math.round(zoom * 100);
+  viewerZoomLevel.value = `${percent}%`;
+  viewerZoomLevel.textContent = `${percent}%`;
+  viewerZoomOut.disabled = zoom <= 1.01;
+  viewerZoomIn.disabled = zoom >= 4.99;
+  viewerZoomReset.disabled = zoom <= 1.01;
+  viewerZoomControls.hidden = viewerImage.hidden;
+}
 
 function applyViewerTransform(animate=false) {
   viewerImage.style.transition = animate ? 'transform 160ms ease' : 'none';
   viewerImage.style.transform = `translate(${panX}px, ${panY}px) scale(${zoom})`;
   viewerImage.classList.toggle('zoomed', zoom > 1.01);
+  updateViewerZoomControls();
+  scheduleViewerRendition();
 }
+
+function clampViewerPan() {
+  if (zoom <= 1.01) {
+    panX = 0;
+    panY = 0;
+    return;
+  }
+  const maxX = viewerStage.clientWidth * (zoom - 1) / 2;
+  const maxY = viewerStage.clientHeight * (zoom - 1) / 2;
+  panX = Math.max(-maxX, Math.min(maxX, panX));
+  panY = Math.max(-maxY, Math.min(maxY, panY));
+}
+
 function resetViewerZoom(animate=false) {
   zoom = 1; panX = 0; panY = 0; pinchDistance = 0; pinchActive = false;
   applyViewerTransform(animate);
 }
-function distanceBetween(touches) {
-  return Math.hypot(touches[0].clientX - touches[1].clientX, touches[0].clientY - touches[1].clientY);
+
+function setViewerZoom(value, animate=false, focalPoint=null) {
+  const previousZoom = zoom;
+  const nextZoom = Math.max(1, Math.min(5, Number(value) || 1));
+  if (focalPoint && previousZoom > 0 && nextZoom !== previousZoom) {
+    const bounds = viewerStage.getBoundingClientRect();
+    const focalX = focalPoint.x - (bounds.left + bounds.width / 2);
+    const focalY = focalPoint.y - (bounds.top + bounds.height / 2);
+    const ratio = nextZoom / previousZoom;
+    panX = focalX - ratio * (focalX - panX);
+    panY = focalY - ratio * (focalY - panY);
+  }
+  zoom = nextZoom;
+  clampViewerPan();
+  applyViewerTransform(animate);
 }
 
+function desiredViewerRendition(photo) {
+  if (!photo || photo.is_video) return null;
+  if (zoom >= 3.25 && photo.full) return {url: photo.full, rank: 3};
+  if (zoom >= 1.75 && photo.detail) return {url: photo.detail, rank: 2};
+  return null;
+}
+
+function scheduleViewerRendition() {
+  clearTimeout(viewerRenditionTimer);
+  const photo = activeViewerPhoto();
+  const desired = desiredViewerRendition(photo);
+  if (!desired || desired.rank <= viewerRenditionRank) return;
+  const generation = viewerLoadGeneration;
+  viewerRenditionTimer = setTimeout(async () => {
+    const image = new Image();
+    image.decoding = 'async';
+    const ready = new Promise((resolve) => {
+      image.addEventListener('load', () => resolve(true), {once: true});
+      image.addEventListener('error', () => resolve(false), {once: true});
+    });
+    image.src = desired.url;
+    if (!await ready) return;
+    if (generation !== viewerLoadGeneration || activeViewerPhoto()?.id !== photo.id) return;
+    if (desired.rank <= viewerRenditionRank) return;
+    viewerImage.src = desired.url;
+    viewerRenditionRank = desired.rank;
+  }, 180);
+}
 function resetViewerTouch() {
   touchStartX = null;
   touchStartY = null;
   touchSwipeActive = false;
   pinchActive = false;
+  viewerGesturePinched = false;
+  viewerPinchCenter = null;
+  viewerTouchPointers.clear();
 }
 
 function stopViewerVideo({clearPoster = false} = {}) {
@@ -94,8 +212,12 @@ function stopViewerVideo({clearPoster = false} = {}) {
   viewerVideo.load();
 }
 let collections = [];
-let activeCollection = '';
-let ownerView = '';
+const requestedCollection = new URLSearchParams(location.search).get('collection') || '';
+let activeCollection = requestedCollection;
+let collectionUnavailableNoticePending = Boolean(requestedCollection && requestedCollection !== 'deleted');
+let ownerView = 'visible';
+let mediaKind = 'all';
+let favoriteOnly = false;
 let editorMode = 'create';
 let confirmAction = null;
 let selectionMode = false;
@@ -111,9 +233,50 @@ let organizerGeneration = 0;
 let organizerCatalog = [];
 let organizerWatchdog = null;
 let galleryGeneration = 0;
+let galleryAbortController = null;
+let galleryRetryMode = 'initial';
 let activePeriod = '';
 let timelineData = [];
-let galleryDensity = localStorage.getItem('davidPiGalleryDensity') === 'compact' ? 'compact' : 'comfortable';
+const savedDensityLevel = Number.parseInt(localStorage.getItem('davidPiGalleryDensityV2'), 10);
+const legacyDensity = localStorage.getItem('davidPiGalleryDensity');
+let galleryDensityLevel = Number.isInteger(savedDensityLevel)
+  ? Math.max(0, Math.min(3, savedDensityLevel))
+  : legacyDensity === 'compact' ? 3 : 0;
+const galleryDensityApi = window.DavidPiGalleryDensityGesture;
+const galleryWindowApi = window.DavidPiGalleryWindow;
+const galleryDensityAnchor = galleryDensityApi.createAnchorPreserver({
+  capture: captureGalleryPosition,
+  restore: restoreGalleryPositionNow,
+});
+const galleryAutoPageGate = galleryDensityApi.createIntersectionPageGate();
+const galleryTopSpacer = document.createElement('div');
+galleryTopSpacer.className = 'gallery-window-spacer gallery-window-spacer-top';
+galleryTopSpacer.setAttribute('aria-hidden', 'true');
+const galleryBottomSpacer = document.createElement('div');
+galleryBottomSpacer.className = 'gallery-window-spacer gallery-window-spacer-bottom';
+galleryBottomSpacer.setAttribute('aria-hidden', 'true');
+let galleryDocumentTop = 0;
+let galleryMeasuredWidth = 0;
+let galleryMeasuredViewportHeight = 0;
+let galleryWindowFocusIndex = null;
+let galleryWindowRange = null;
+const galleryWindowManager = galleryWindowApi.createWindowManager({
+  cardCap: (columns) => galleryWindowApi.DEFAULT_CARD_CAPS[columns],
+  overscanBefore: galleryWindowApi.DEFAULT_OVERSCAN_BEFORE,
+  overscanAfter: galleryWindowApi.DEFAULT_OVERSCAN_AFTER,
+  mount: mountGalleryWindowRow,
+  unmount: unmountGalleryWindowRow,
+  update: updateGalleryWindowRow,
+  setSpacers: (top, bottom, range) => {
+    galleryTopSpacer.style.height = `${Math.max(0, top)}px`;
+    galleryBottomSpacer.style.height = `${Math.max(0, bottom)}px`;
+    gallery.dataset.mountedPhotos = String(range.mountedPhotos || 0);
+    galleryWindowRange = range;
+  },
+});
+const galleryWindowFrame = galleryWindowApi.createFrameScheduler(renderGalleryWindowNow);
+const galleryOriginFrame = galleryWindowApi.createFrameScheduler(resyncGalleryWindowOrigin);
+const galleryMetadataRequests = galleryWindowApi.createGenerationRequestGate(galleryGeneration);
 const csrf = document.querySelector('meta[name="csrf-token"]')?.content || '';
 if (/Android/i.test(navigator.userAgent) && /;\s*wv\)/i.test(navigator.userAgent)) {
   document.documentElement.classList.add('davidpi-android-app-shell');
@@ -126,8 +289,33 @@ async function api(url, options = {}) {
   }
   const response = await fetch(url, options);
   const result = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(result.error || 'Something went wrong.');
+  if (!response.ok) {
+    const error = new Error(apiErrorMessage(result, 'Something went wrong.'));
+    error.status = response.status;
+    error.data = result;
+    throw error;
+  }
   return result;
+}
+
+function versionedPhotoItems(ids) {
+  const wanted = new Set(ids);
+  return loadedPhotos
+    .filter((photo) => wanted.has(photo.id))
+    .map((photo) => ({id: photo.id, version: photo.version}));
+}
+
+function applyReturnedMediaVersions(result) {
+  const versions = new Map((result?.items || []).map((item) => [item.id, item.version]));
+  loadedPhotos.forEach((photo) => {
+    if (versions.has(photo.id)) photo.version = versions.get(photo.id);
+  });
+}
+
+function apiErrorMessage(result, fallback) {
+  if (typeof result?.error === 'string' && result.error.trim()) return result.error;
+  if (typeof result?.error?.message === 'string' && result.error.message.trim()) return result.error.message;
+  return fallback;
 }
 
 function monthLabel(period, includeYear = false) {
@@ -137,13 +325,241 @@ function monthLabel(period, includeYear = false) {
   }).format(new Date(Date.UTC(year, month - 1, 1)));
 }
 
-function setGalleryDensity(value, preservePosition = true) {
-  const position = preservePosition ? captureGalleryPosition() : null;
-  galleryDensity = value === 'compact' ? 'compact' : 'comfortable';
-  localStorage.setItem('davidPiGalleryDensity', galleryDensity);
-  applyGalleryDensity();
-  if (position) restoreGalleryPosition(position);
+function galleryCollectionName() {
+  if (activeCollection === 'deleted') return 'Recently deleted';
+  if (!activeCollection) return 'All media';
+  return collections.find((collection) => collection.id === activeCollection)?.name || 'Collection';
 }
+
+function updateGallerySummary() {
+  // Text, filters, skeletons, and collection controls all sit above the
+  // virtualized gallery. Coalesce one post-layout origin check without adding
+  // geometry reads to the scroll hot path or changing paging intent.
+  queueGalleryOriginResync();
+  const collectionName = galleryCollectionName();
+  galleryEyebrow.textContent = ownerView === 'mine'
+    ? 'Added by me'
+    : ownerView === 'shared' ? 'Shared library' : 'Your library';
+  galleryTitle.textContent = activePeriod
+    ? (activePeriod.length === 4 ? activePeriod : monthLabel(activePeriod, true))
+    : favoriteOnly ? 'Favorites'
+    : mediaKind === 'photo' ? 'Photos'
+    : mediaKind === 'video' ? 'Videos'
+    : collectionName;
+  if (activePeriod) galleryEyebrow.textContent = collectionName;
+  const defaultContext = !activeCollection && !activePeriod && !favoriteOnly && mediaKind === 'all';
+  document.querySelector('#galleryContext').classList.toggle('visually-hidden', defaultContext);
+  document.querySelector('.gallery-results').classList.toggle('gallery-default-context', defaultContext);
+  const appliedFilters = [];
+  if (mediaKind !== 'all') appliedFilters.push(mediaKind === 'photo' ? 'Photos' : 'Videos');
+  if (favoriteOnly) appliedFilters.push('Favorites');
+  if (activePeriod) appliedFilters.push(activePeriod.length === 4 ? activePeriod : monthLabel(activePeriod, true));
+  mediaFilterSummary.textContent = appliedFilters.join(' · ') || 'All types · Any date';
+  mediaFilters.classList.toggle('has-active-filters', appliedFilters.length > 0);
+  // Parallel collection/timeline requests may settle after the photo request.
+  // Keep the explicit offline state truthful until the user retries it.
+  if (!retryGallery.hidden && loadedPhotos.length === 0) {
+    galleryResultCount.textContent = 'Unavailable';
+    return;
+  }
+  if (loadingPhotos && loadedPhotos.length === 0) {
+    galleryResultCount.textContent = 'Loading…';
+  } else if (totalPhotos === 0) {
+    galleryResultCount.textContent = 'No items';
+  } else if (loadedPhotos.length < totalPhotos) {
+    galleryResultCount.textContent = `${loadedPhotos.length.toLocaleString()} of ${totalPhotos.toLocaleString()}`;
+  } else {
+    galleryResultCount.textContent = `${totalPhotos.toLocaleString()} item${totalPhotos === 1 ? '' : 's'}`;
+  }
+}
+
+function configureEmptyState() {
+  const heading = emptyState.querySelector('h2');
+  const copy = emptyState.querySelector('p');
+  const upload = emptyState.querySelector('[data-upload]');
+  emptyBrowseAll.hidden = true;
+  upload.hidden = false;
+  if (activeCollection === 'deleted') {
+    heading.textContent = 'Recently Deleted is empty.';
+    copy.textContent = 'Deleted photos stay here until an owner restores or permanently deletes them.';
+    upload.hidden = true;
+  } else if (favoriteOnly) {
+    heading.textContent = 'No favorites in this view.';
+    copy.textContent = 'Open any visible photo or video and choose Favorite to keep it close.';
+    upload.hidden = true;
+    emptyBrowseAll.textContent = 'Show all media';
+    emptyBrowseAll.hidden = false;
+  } else if (activePeriod) {
+    heading.textContent = 'No moments in this date range.';
+    copy.textContent = 'Choose another month or return to the complete library.';
+    upload.hidden = true;
+    emptyBrowseAll.textContent = 'Show all dates';
+    emptyBrowseAll.hidden = false;
+  } else if (activeCollection) {
+    heading.textContent = 'Nothing in this collection yet.';
+    copy.textContent = 'Add new media here, or browse the library and organize existing items.';
+    emptyBrowseAll.textContent = 'Browse all media';
+    emptyBrowseAll.hidden = false;
+  } else if (ownerView === 'mine') {
+    heading.textContent = 'You haven’t added any media yet.';
+    copy.textContent = 'Add photos or videos and they’ll appear here automatically.';
+  } else {
+    heading.textContent = 'Your favorite moments belong here.';
+    copy.textContent = 'Add a handful or a whole camera roll. We’ll arrange everything by date.';
+  }
+}
+
+function gridColumnCount() {
+  return galleryDensityApi.modeForLevel(galleryDensityLevel).columns;
+}
+
+function setGalleryDensity(value, preservePosition = true) {
+  const nextLevel = galleryDensityApi.modeForLevel(value).level;
+  if (selectionMode && nextLevel !== 0) {
+    showToast('Finish selecting before switching to browse-only density.');
+    return false;
+  }
+  if (nextLevel === galleryDensityLevel) {
+    applyGalleryDensity();
+    return false;
+  }
+  // A layout collapse must never spend a scroll gesture that happened before
+  // the density change. Automatic pages require fresh user intent below.
+  galleryAutoPageGate.revokeIntent();
+  const change = () => {
+    galleryDensityLevel = nextLevel;
+    localStorage.setItem('davidPiGalleryDensityV2', String(galleryDensityLevel));
+    applyGalleryDensity();
+  };
+  if (preservePosition) galleryDensityAnchor.mutate(change);
+  else change();
+  return true;
+}
+
+function pointerDistance(points) {
+  return Math.hypot(points[0].x - points[1].x, points[0].y - points[1].y);
+}
+
+function pointerCenter(points) {
+  return {x: (points[0].x + points[1].x) / 2, y: (points[0].y + points[1].y) / 2};
+}
+
+function createGalleryDensityGesture() {
+  return window.DavidPiGalleryDensityGesture.create({
+    getLevel: () => galleryDensityLevel,
+    setLevel: (level) => setGalleryDensity(level),
+    now: () => performance.now(),
+  });
+}
+const galleryDensityGesture = createGalleryDensityGesture();
+const galleryTouchDensityGesture = createGalleryDensityGesture();
+let galleryTouchPinchActive = false;
+
+function captureGalleryPointers(pointerIds) {
+  pointerIds.forEach((pointerId) => {
+    try { gallery.setPointerCapture?.(pointerId); } catch (_) { /* Pointer already ended. */ }
+  });
+}
+
+function endGalleryPointer(event, releaseCapture = true) {
+  galleryDensityGesture.pointerEnd(event.pointerId);
+  if (releaseCapture && gallery.hasPointerCapture?.(event.pointerId)) {
+    gallery.releasePointerCapture(event.pointerId);
+  }
+}
+
+gallery.addEventListener('pointerdown', (event) => {
+  if (event.pointerType !== 'touch'||galleryTouchPinchActive) return;
+  const result = galleryDensityGesture.pointerDown({
+    id: event.pointerId,
+    x: event.clientX,
+    y: event.clientY,
+  });
+  if (!result.consume) return;
+  captureGalleryPointers(result.captureIds);
+  event.preventDefault();
+});
+
+gallery.addEventListener('pointermove', (event) => {
+  if (event.pointerType !== 'touch'||galleryTouchPinchActive) return;
+  const result = galleryDensityGesture.pointerMove({
+    id: event.pointerId,
+    x: event.clientX,
+    y: event.clientY,
+  });
+  captureGalleryPointers(result.captureIds || []);
+  if (result.consume) event.preventDefault();
+});
+
+gallery.addEventListener('pointerup', (event) => {if(!galleryTouchPinchActive)endGalleryPointer(event);});
+gallery.addEventListener('pointercancel', (event) => {if(!galleryTouchPinchActive)endGalleryPointer(event);});
+gallery.addEventListener('lostpointercapture', (event) => endGalleryPointer(event, false));
+
+function galleryTouchPoint(touch) {
+  return {id:touch.identifier,x:touch.clientX,y:touch.clientY};
+}
+function beginGalleryTouchPinch(touches) {
+  galleryDensityGesture.cancelAll();
+  galleryTouchDensityGesture.cancelAll();
+  const first=galleryTouchDensityGesture.pointerDown(galleryTouchPoint(touches[0]));
+  const second=galleryTouchDensityGesture.pointerDown(galleryTouchPoint(touches[1]));
+  // Track any accepted two-touch sequence. If the fingertips initially land
+  // very close together the controller claims it as soon as they separate;
+  // this also survives Android cancelling an earlier one-finger pointer pan.
+  galleryTouchPinchActive=Boolean(first.accepted&&second.accepted);
+  return galleryTouchPinchActive;
+}
+gallery.addEventListener('touchstart',(event)=>{
+  if(event.touches.length===2&&beginGalleryTouchPinch(event.touches))event.preventDefault();
+  else if(galleryTouchPinchActive)event.preventDefault();
+},{passive:false});
+gallery.addEventListener('touchmove',(event)=>{
+  if(!galleryTouchPinchActive||event.touches.length!==2){if(galleryTouchPinchActive)event.preventDefault();return;}
+  let consumed=false;
+  for(const touch of event.touches){
+    const result=galleryTouchDensityGesture.pointerMove(galleryTouchPoint(touch));
+    consumed=consumed||result.consume;
+  }
+  if(consumed)event.preventDefault();
+},{passive:false});
+gallery.addEventListener('touchend',(event)=>{
+  if(!galleryTouchPinchActive)return;
+  galleryTouchDensityGesture.cancelAll();
+  galleryTouchPinchActive=false;
+  if(event.touches.length===2)beginGalleryTouchPinch(event.touches);
+},{passive:false});
+gallery.addEventListener('touchcancel',(event)=>{
+  galleryTouchDensityGesture.cancelAll();
+  galleryTouchPinchActive=false;
+},{passive:false});
+window.addEventListener('blur',()=>{
+  galleryDensityGesture.cancelAll();
+  galleryTouchDensityGesture.cancelAll();
+  galleryTouchPinchActive=false;
+});
+gallery.addEventListener('click', (event) => {
+  if (!galleryDensityGesture.shouldSuppressClick()&&!galleryTouchDensityGesture.shouldSuppressClick()) return;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+}, true);
+gallery.addEventListener('click', (event) => {
+  const card = event.target.closest?.('.photo');
+  if (!card || !gallery.contains(card)) return;
+  if (!galleryDensityApi.modeForLevel(galleryDensityLevel).interactive) {
+    event.preventDefault();
+    return;
+  }
+  if (selectionMode) togglePhotoSelection(card.dataset.photoId, card);
+  else openPhoto(card.dataset.photoId);
+});
+gallery.addEventListener('error', (event) => {
+  const image = event.target;
+  if (!image.matches?.('.photo img') || !image.parentNode) return;
+  const fallback = document.createElement('span');
+  fallback.className = 'photo-preview-fallback';
+  fallback.textContent = 'Preview unavailable';
+  image.replaceWith(fallback);
+}, true);
 
 function monthHeading(period) {
   const row = document.createElement('div');
@@ -151,25 +567,182 @@ function monthHeading(period) {
   const heading = document.createElement('h2');
   heading.className = 'gallery-month';
   heading.textContent = monthLabel(period, true);
-  const controls = document.createElement('span');
-  controls.className = 'gallery-month-zoom';
-  const zoomOut = document.createElement('button');
-  zoomOut.type = 'button';
-  zoomOut.dataset.galleryDensity = 'compact';
-  zoomOut.textContent = '−';
-  zoomOut.setAttribute('aria-label', `Zoom out near ${heading.textContent}`);
-  zoomOut.disabled = galleryDensity === 'compact';
-  zoomOut.addEventListener('click', () => setGalleryDensity('compact'));
-  const zoomIn = document.createElement('button');
-  zoomIn.type = 'button';
-  zoomIn.dataset.galleryDensity = 'comfortable';
-  zoomIn.textContent = '+';
-  zoomIn.setAttribute('aria-label', `Zoom in near ${heading.textContent}`);
-  zoomIn.disabled = galleryDensity === 'comfortable';
-  zoomIn.addEventListener('click', () => setGalleryDensity('comfortable'));
-  controls.append(zoomOut, zoomIn);
-  row.append(heading, controls);
+  row.append(heading);
   return row;
+}
+
+function ensureGalleryWindowStructure() {
+  gallery.dataset.windowed = 'true';
+  if (
+    galleryTopSpacer.parentNode === gallery
+    && galleryBottomSpacer.parentNode === gallery
+  ) return;
+  galleryWindowManager.releaseAll();
+  gallery.replaceChildren(galleryTopSpacer, galleryBottomSpacer);
+}
+
+function measureGalleryWindow() {
+  const bounds = gallery.getBoundingClientRect();
+  galleryMeasuredWidth = Math.max(1, gallery.clientWidth || bounds.width || window.innerWidth);
+  galleryMeasuredViewportHeight = Math.max(1, window.innerHeight || 1);
+  galleryDocumentTop = bounds.top + window.scrollY;
+  return galleryMeasuredWidth;
+}
+
+function galleryWindowModel() {
+  const columns = gridColumnCount();
+  const gap = galleryWindowApi.gapForColumns(columns);
+  return galleryWindowApi.buildRowModel(loadedPhotos, {
+    columns,
+    gap,
+    width: galleryMeasuredWidth || measureGalleryWindow(),
+    viewportHeight: galleryMeasuredViewportHeight || window.innerHeight || 1,
+    cardCap: galleryWindowApi.DEFAULT_CARD_CAPS[columns],
+  });
+}
+
+function rebuildGalleryWindow({preserveRows = false, position = null, append = false} = {}) {
+  ensureGalleryWindowStructure();
+  const previousWidth = galleryMeasuredWidth;
+  const previousHeight = galleryMeasuredViewportHeight;
+  measureGalleryWindow();
+  const previous = galleryWindowManager.model();
+  if (append && previous.columns === gridColumnCount()
+      && previousWidth === galleryMeasuredWidth && previousHeight === galleryMeasuredViewportHeight) {
+    const extended = galleryWindowApi.appendRowModel(previous, loadedPhotos);
+    galleryWindowManager.setModel(extended.model, {preserveRows: true, appendFrom: extended.changedFrom});
+  } else {
+    galleryWindowManager.setModel(galleryWindowModel(), {preserveRows});
+  }
+  if (position) restoreGalleryPositionNow(position);
+  else renderGalleryWindowNow();
+}
+
+function renderGalleryWindowNow() {
+  if (galleryTopSpacer.parentNode !== gallery) return;
+  const viewportHeight = Math.max(1, window.innerHeight || 1);
+  const model = galleryWindowManager.model();
+  if (Math.abs(viewportHeight - model.viewportHeight) > 0.5) {
+    const bounds = gallery.getBoundingClientRect();
+    galleryDocumentTop = bounds.top + window.scrollY;
+    const position = captureGalleryPosition();
+    galleryMeasuredWidth = Math.max(1, gallery.clientWidth || bounds.width || window.innerWidth);
+    galleryMeasuredViewportHeight = viewportHeight;
+    galleryWindowManager.setModel(galleryWindowModel());
+    restoreGalleryPositionNow(position);
+    return galleryWindowManager.range();
+  }
+  const relativeScroll = Math.max(0, window.scrollY - galleryDocumentTop);
+  const range = galleryWindowManager.update(relativeScroll, viewportHeight);
+  if (galleryWindowFocusIndex !== null) {
+    const cards = [...gallery.querySelectorAll('.photo')];
+    const nearest = cards.sort((left, right) => (
+      Math.abs(Number(left.dataset.photoIndex) - galleryWindowFocusIndex)
+      - Math.abs(Number(right.dataset.photoIndex) - galleryWindowFocusIndex)
+    ))[0];
+    galleryWindowFocusIndex = null;
+    nearest?.focus({preventScroll: true});
+  }
+  return range;
+}
+
+function queueGalleryWindowRender() {
+  galleryWindowFrame.request();
+}
+
+function queueGalleryOriginResync() {
+  galleryOriginFrame.request();
+}
+
+function resyncGalleryWindowOrigin() {
+  if (galleryTopSpacer.parentNode !== gallery) return;
+  const bounds = gallery.getBoundingClientRect();
+  const nextWidth = Math.max(1, gallery.clientWidth || bounds.width || window.innerWidth);
+  const nextViewportHeight = Math.max(1, window.innerHeight || 1);
+  const geometryChanged = (
+    Math.abs(nextWidth - galleryMeasuredWidth) > 0.5
+    || Math.abs(nextViewportHeight - galleryMeasuredViewportHeight) > 0.5
+  );
+  galleryDocumentTop = bounds.top + window.scrollY;
+  if (geometryChanged) {
+    // Capture against the corrected document origin, then rebuild arithmetic
+    // rows if an above-gallery layout change also changed available width.
+    const position = captureGalleryPosition();
+    galleryMeasuredWidth = nextWidth;
+    galleryMeasuredViewportHeight = nextViewportHeight;
+    galleryWindowManager.setModel(galleryWindowModel());
+    restoreGalleryPositionNow(position);
+    return;
+  }
+  galleryMeasuredWidth = nextWidth;
+  galleryMeasuredViewportHeight = nextViewportHeight;
+  renderGalleryWindowNow();
+}
+
+function mountGalleryWindowRow(row, rowIndex, successor, range) {
+  let node;
+  if (row.type === 'month') {
+    node = monthHeading(row.period);
+    node.classList.add('gallery-window-row', 'gallery-window-month-row');
+  } else {
+    node = document.createElement('div');
+    node.className = 'gallery-window-row gallery-window-photo-row';
+    node.style.setProperty('--gallery-row-columns', String(gridColumnCount()));
+    node.style.setProperty('--gallery-row-gap', `${galleryWindowApi.gapForColumns(gridColumnCount())}px`);
+    node.style.setProperty('--gallery-row-card-height', `${row.cardHeight}px`);
+    row.itemIndexes.forEach((itemIndex, columnIndex) => {
+      const photo = loadedPhotos[itemIndex];
+      if (photo) node.append(photoCard(photo, {
+        itemIndex,
+        rowIndex,
+        columnIndex,
+        range,
+      }));
+    });
+  }
+  node.dataset.windowRow = String(rowIndex);
+  node.style.height = `${row.height}px`;
+  gallery.insertBefore(node, successor || galleryBottomSpacer);
+  return node;
+}
+
+function updateGalleryWindowRow(node, row, rowIndex, range) {
+  if (row.type !== 'photos') return;
+  node.querySelectorAll('.photo').forEach((card, columnIndex) => {
+    const image = card.querySelector('img');
+    if (!image) return;
+    const hints = galleryWindowApi.thumbnailHintsForRow(rowIndex, range, columnIndex);
+    image.loading = hints.loading;
+    image.fetchPriority = hints.fetchPriority;
+  });
+}
+
+function unmountGalleryWindowRow(node) {
+  const focused = document.activeElement;
+  if (focused && node.contains(focused)) {
+    galleryWindowFocusIndex = Number(focused.dataset.photoIndex || 0);
+    // Move focus deliberately before removing its card. The next reconciliation
+    // moves it to the nearest visible native button without changing scroll.
+    gallery.tabIndex = -1;
+    gallery.focus({preventScroll: true});
+    galleryStatus.textContent = 'Media focus moved with the visible gallery window.';
+  }
+  node.querySelectorAll('img').forEach((image) => {
+    image.removeAttribute('src');
+    image.removeAttribute('srcset');
+  });
+  node.replaceChildren();
+  node.remove();
+}
+
+function galleryMetadataBatchSize() {
+  const columns = gridColumnCount();
+  return galleryWindowApi.metadataBatchSize({
+    columns,
+    gap: galleryWindowApi.gapForColumns(columns),
+    width: galleryMeasuredWidth || measureGalleryWindow(),
+    viewportHeight: window.innerHeight || 1,
+  });
 }
 
 function renderTimeline() {
@@ -185,6 +758,7 @@ function renderTimeline() {
     const button = document.createElement('button');
     button.type = 'button';
     button.classList.toggle('selected', activePeriod === year);
+    button.setAttribute('aria-pressed', activePeriod === year ? 'true' : 'false');
     button.textContent = `${year} · ${count}`;
     button.addEventListener('click', () => setTimelinePeriod(year));
     const open = document.createElement('button');
@@ -205,6 +779,7 @@ function renderTimeline() {
     const button = document.createElement('button');
     button.type = 'button';
     button.classList.toggle('selected', activePeriod === entry.month);
+    button.setAttribute('aria-pressed', activePeriod === entry.month ? 'true' : 'false');
     const name = document.createElement('span');
     name.textContent = monthLabel(entry.month, !selectedYear);
     const count = document.createElement('small');
@@ -223,9 +798,10 @@ function renderTimeline() {
   timelineSummary.textContent = activePeriod
     ? (activePeriod.length === 4 ? activePeriod : monthLabel(activePeriod, true))
     : 'All years and months';
+  updateGallerySummary();
 }
 
-async function loadTimeline() {
+async function loadTimeline(generation = galleryGeneration) {
   if (activeCollection === 'deleted') {
     timelineData = [];
     document.querySelector('#mediaTimeline').hidden = true;
@@ -233,12 +809,35 @@ async function loadTimeline() {
   }
   document.querySelector('#mediaTimeline').hidden = false;
   const query = new URLSearchParams();
-  if (ownerView) query.set('view', ownerView);
+  query.set('scope', ownerView);
+  if (mediaKind !== 'all') query.set('kind', mediaKind);
+  if (favoriteOnly) query.set('favorite', 'true');
   if (activeCollection) query.set('collection', activeCollection);
   const result = await api(`/api/photos/timeline?${query}`);
+  if (generation !== galleryGeneration) return;
   timelineData = result.months || [];
   renderTimeline();
 }
+
+async function refreshTimelineIfOpen(generation = galleryGeneration) {
+  if (!mediaTimeline.open) return false;
+  await loadTimeline(generation);
+  return true;
+}
+
+mediaTimeline.addEventListener('toggle', () => {
+  queueGalleryOriginResync();
+  if (!mediaTimeline.open) return;
+  const generation = galleryGeneration;
+  timelineSummary.textContent = 'Loading dates…';
+  refreshTimelineIfOpen(generation).catch(() => {
+    if (generation === galleryGeneration) timelineSummary.textContent = 'Dates unavailable · close and retry';
+  });
+});
+
+mediaFilters.addEventListener('toggle', () => {
+  queueGalleryOriginResync();
+});
 
 async function setTimelinePeriod(period) {
   activePeriod = activePeriod === period ? '' : period;
@@ -250,9 +849,6 @@ async function setTimelinePeriod(period) {
 
 async function openTimelinePeriod(period) {
   activePeriod = period;
-  galleryDensity = 'comfortable';
-  localStorage.setItem('davidPiGalleryDensity', galleryDensity);
-  applyGalleryDensity();
   renderTimeline();
   await refreshPhotos();
   document.querySelector('#mediaTimeline').open = false;
@@ -261,29 +857,38 @@ async function openTimelinePeriod(period) {
 
 document.querySelector('#clearTimeline').addEventListener('click', () => setTimelinePeriod(''));
 
-function applyGalleryDensity() {
-  gallery.classList.toggle('compact', galleryDensity === 'compact');
-  document.querySelectorAll('[data-density]').forEach((button) => {
-    const selected = button.dataset.density === galleryDensity;
-    button.classList.toggle('selected', selected);
-    button.setAttribute('aria-pressed', selected ? 'true' : 'false');
-  });
-  // Month controls are created as the paged gallery grows. Refresh every
-  // control after either button is used so + and - always remain reversible.
-  document.querySelectorAll('[data-gallery-density]').forEach((button) => {
-    button.disabled = button.dataset.galleryDensity === galleryDensity;
-    button.setAttribute('aria-pressed', button.disabled ? 'true' : 'false');
-  });
+function updateGalleryDensityControls() {
+  gridZoomOut.disabled = galleryDensityLevel === 0;
+  gridZoomIn.disabled = galleryDensityLevel === 3 || selectionMode;
+  gridZoomIn.title = selectionMode ? 'Finish selecting to use browse-only density' : '';
 }
 
-document.querySelectorAll('[data-density]').forEach((button) => button.addEventListener('click', () => {
-  setGalleryDensity(button.dataset.density);
-}));
+function applyGalleryDensity() {
+  const mode = galleryDensityApi.modeForLevel(galleryDensityLevel);
+  gallery.dataset.densityLevel = String(mode.level);
+  gallery.dataset.interactionMode = mode.mode;
+  gridDensityLabel.value = `${mode.columns} across`;
+  gridDensityLabel.textContent = `${mode.columns} across`;
+  gridDensityMode.textContent = mode.interactive
+    ? 'Tap to open or select'
+    : 'Browse only · switch to 3 across to open or select';
+  updateGalleryDensityControls();
+  // Row membership and height change with density. Rebuild the compact row
+  // model, then mount only the new visible/overscan window.
+  rebuildGalleryWindow();
+}
+
+gridZoomOut.addEventListener('click', () => setGalleryDensity(galleryDensityLevel - 1));
+gridZoomIn.addEventListener('click', () => setGalleryDensity(galleryDensityLevel + 1));
 applyGalleryDensity();
 
 function openUpload() {
   message.textContent = '';
   const collection = collections.find((item) => item.id === activeCollection);
+  if (collection && !collection.is_mine) {
+    showToast('Add media to your library first, then organize it into this shared collection.');
+    return;
+  }
   const visibility = document.querySelector('#mediaVisibility');
   visibility.value = collection?.visibility === 'private' ? 'private' : 'shared';
   visibility.disabled = collection?.visibility === 'private';
@@ -318,7 +923,7 @@ function uploadFile(file, onProgress) {
       try {
         const result = JSON.parse(xhr.responseText);
         if (xhr.status >= 200 && xhr.status < 300) resolve(result);
-        else reject(new Error(result.error || 'Upload failed'));
+        else reject(new Error(apiErrorMessage(result, 'Upload failed')));
       } catch { reject(new Error('Upload failed')); }
     };
     xhr.onerror = () => reject(new Error('Connection lost during upload'));
@@ -362,6 +967,7 @@ startUpload.addEventListener('click', async () => {
   startUpload.disabled = true;
   input.disabled = true;
   progress.hidden = false;
+  progress.setAttribute('aria-valuenow', '0');
   uploadQueue.hidden = false;
   uploadQueue.innerHTML = '';
   progressBar.style.width = '2%';
@@ -373,6 +979,7 @@ startUpload.addEventListener('click', async () => {
       const totalBytes = files.reduce((sum, file) => sum + Math.max(file.size, 1), 0);
       const uploadedBytes = files.reduce((sum, file, index) => sum + Math.max(file.size, 1) * progressByFile[index], 0);
       progressBar.style.width = `${Math.max(2, Math.round(uploadedBytes / totalBytes * 100))}%`;
+      progress.setAttribute('aria-valuenow', String(Math.round(uploadedBytes / totalBytes * 100)));
     };
     const results = new Array(files.length);
     let cursor = 0;
@@ -397,6 +1004,7 @@ startUpload.addEventListener('click', async () => {
     if (duplicates) bits.push(`${duplicates} already here`);
     if (failed) bits.push(`${failed} couldn’t be added`);
     progressBar.style.width = '100%';
+    progress.setAttribute('aria-valuenow', '100');
     message.textContent = bits.join(' · ') || 'All done.';
     input.value = '';
     selection.hidden = true;
@@ -449,8 +1057,13 @@ function primeViewerNeighbors(index) {
 async function upgradeViewerImage(photo, generation) {
   const entry = viewerPreviewEntry(photo);
   const ready = await entry.ready;
-  if (!ready || generation !== viewerLoadGeneration || loadedPhotos[currentPhotoIndex]?.id !== photo.id) return;
-  viewerImage.src = entry.url;
+  if (generation !== viewerLoadGeneration || loadedPhotos[currentPhotoIndex]?.id !== photo.id) return;
+  if (ready && viewerRenditionRank < 2) {
+    viewerImage.src = entry.url;
+    viewerRenditionRank = 1;
+  }
+  // Keep the thumbnail usable when a larger rendition fails instead of
+  // leaving a permanent spinner and blur over the viewer.
   viewerStage.classList.remove('loading');
 }
 
@@ -466,11 +1079,14 @@ function showPhoto(index) {
   currentPhotoIndex = index;
   const generation = ++viewerLoadGeneration;
   const photo = loadedPhotos[index];
+  clearTimeout(viewerRenditionTimer);
+  viewerRenditionRank = 0;
   resetViewerZoom();
   stopViewerVideo();
   viewerVideo.loop = false;
   viewerImage.hidden = photo.is_video;
   viewerVideo.hidden = !photo.is_video;
+  viewerZoomControls.hidden = photo.is_video;
   if (photo.is_video) {
     viewerStage.classList.remove('loading');
     viewerImage.removeAttribute('src');
@@ -488,12 +1104,42 @@ function showPhoto(index) {
   }
   primeViewerNeighbors(index);
   viewerName.textContent = `${photo.original_name} · ${photo.visibility === 'private' ? 'Only me' : `Added by ${photo.owner_display}`}`;
-  document.querySelector('#viewerPrivacy').textContent = photo.visibility === 'private' ? 'Share' : 'Only me';
+  const viewerPrivacy = document.querySelector('#viewerPrivacy');
+  viewerPrivacy.textContent = photo.visibility === 'private' ? 'Share' : 'Only me';
   downloadOriginal.href = photo.original;
   const deleted = activeCollection === 'deleted';
-  document.querySelector('#organizePhoto').hidden = deleted;
-  document.querySelector('#restorePhoto').hidden = !deleted;
-  document.querySelector('#deletePhoto').textContent = deleted ? 'Delete forever' : 'Delete';
+  const mytubeButton = document.querySelector('#addToMytube');
+  mytubeButton.hidden = deleted || !photo.is_video || !photo.is_mine;
+  mytubeButton.disabled = false;
+  mytubeButton.textContent = photo.mytube_linked ? 'Remove from MyTube' : 'Add to MyTube';
+  if (!mytubeButton.hidden && photo.mytube_linked === undefined) {
+    const expectedId = photo.id;
+    api(`/api/mytube/media-links/${encodeURIComponent(photo.id)}`)
+      .then((result) => {
+        photo.mytube_linked = Boolean(result.linked);
+        if (loadedPhotos[currentPhotoIndex]?.id === expectedId) {
+          mytubeButton.textContent = photo.mytube_linked ? 'Remove from MyTube' : 'Add to MyTube';
+        }
+      })
+      .catch(() => {});
+  }
+  viewerPrivacy.hidden = deleted || !photo.is_mine;
+  document.querySelector('#organizePhoto').hidden = deleted || photo.ownership_status !== 'owned';
+  document.querySelector('#restorePhoto').hidden = !deleted || !photo.is_mine;
+  const deletePhoto = document.querySelector('#deletePhoto');
+  deletePhoto.hidden = !photo.is_mine || deleted;
+  deletePhoto.textContent = deleted ? 'Delete forever' : 'Delete';
+  viewerFavorite.hidden = deleted;
+  viewerFavorite.setAttribute('aria-pressed', photo.favorite ? 'true' : 'false');
+  viewerFavorite.textContent = photo.favorite ? '★ Favorited' : '☆ Favorite';
+  viewerCaptionText.textContent = photo.caption || 'No caption';
+  viewerCaptionText.hidden = Boolean(photo.is_mine && !deleted);
+  viewerCaptionEditor.hidden = !photo.is_mine || deleted;
+  viewerCaption.value = photo.caption || '';
+  viewerCaptionCount.textContent = `${Array.from(viewerCaption.value).length.toLocaleString()} / 1,000`;
+  viewerCaptionStatus.textContent = '';
+  updateViewerCaptionDisclosure(photo,deleted);
+  setViewerCaptionExpanded(false);
   document.querySelector('#previousPhoto').disabled = index === 0;
   document.querySelector('#nextPhoto').disabled = index >= totalPhotos - 1;
 }
@@ -510,19 +1156,146 @@ async function movePhoto(direction) {
   showPhoto(currentPhotoIndex + direction);
 }
 
-function photoCard(photo) {
+function updateFavoriteBadge(photo) {
+  const card = gallery.querySelector(`[data-photo-id="${CSS.escape(photo.id)}"]`);
+  if (!card) return;
+  card.querySelector('.photo-favorite')?.remove();
+  if (photo.favorite) {
+    const badge = document.createElement('span');
+    badge.className = 'photo-favorite';
+    badge.textContent = '★';
+    badge.setAttribute('aria-label', 'Favorite');
+    card.append(badge);
+  }
+}
+
+async function setViewerFavorite() {
+  const photo = loadedPhotos[currentPhotoIndex];
+  if (!photo || activeCollection === 'deleted') return;
+  const desired = !photo.favorite;
+  viewerFavorite.disabled = true;
+  try {
+    const result = await api(`/api/photos/${encodeURIComponent(photo.id)}/favorite`, {
+      method: 'PUT',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        favorite: desired,
+        state_version: photo.state_version,
+        media_version: photo.version,
+      }),
+    });
+    photo.favorite = result.favorite;
+    photo.state_version = result.state_version;
+    viewerFavorite.setAttribute('aria-pressed', photo.favorite ? 'true' : 'false');
+    viewerFavorite.textContent = photo.favorite ? '★ Favorited' : '☆ Favorite';
+    updateFavoriteBadge(photo);
+    if (favoriteOnly && !photo.favorite) {
+      const removedId = photo.id;
+      viewer.close();
+      removeLoadedPhotos([removedId]);
+      showToast('Removed from your favorites.');
+    } else {
+      showToast(photo.favorite ? 'Added to your favorites.' : 'Removed from your favorites.');
+    }
+  } catch (error) {
+    showToast(error.message);
+  } finally {
+    viewerFavorite.disabled = false;
+  }
+}
+
+async function saveViewerCaption() {
+  const photo = loadedPhotos[currentPhotoIndex];
+  if (!photo || !photo.is_mine || activeCollection === 'deleted') return;
+  const button = document.querySelector('#saveViewerCaption');
+  button.disabled = true;
+  viewerCaptionStatus.textContent = 'Saving caption…';
+  try {
+    const result = await api(`/api/photos/${encodeURIComponent(photo.id)}/caption`, {
+      method: 'PUT',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        caption: viewerCaption.value,
+        caption_version: photo.caption_version,
+        media_version: photo.version,
+      }),
+    });
+    photo.caption = result.caption;
+    photo.caption_version = result.caption_version;
+    viewerCaption.value = result.caption;
+    viewerCaptionText.textContent = result.caption || 'No caption';
+    updateViewerCaptionDisclosure(photo,false);
+    viewerCaptionStatus.textContent = 'Caption saved.';
+    setViewerCaptionExpanded(false);
+    showToast('Caption saved.');
+  } catch (error) {
+    viewerCaptionStatus.textContent = error.message;
+  } finally {
+    button.disabled = false;
+  }
+}
+
+viewerFavorite.addEventListener('click', setViewerFavorite);
+function setViewerCaptionExpanded(expanded, focusEditor=false) {
+  const open=Boolean(expanded);
+  viewerDetails.hidden=!open;
+  viewerCaptionToggle.setAttribute('aria-expanded',String(open));
+  viewerMeta.classList.toggle('details-expanded',open);
+  if(open&&focusEditor&&!viewerCaptionEditor.hidden)requestAnimationFrame(()=>viewerCaption.focus());
+}
+function updateViewerCaptionDisclosure(photo,deleted) {
+  const hasCaption=Boolean(String(photo?.caption||'').trim());
+  const editable=Boolean(photo?.is_mine&&!deleted);
+  viewerCaptionToggleLabel.textContent=editable?(hasCaption?'Edit caption':'Add caption'):(hasCaption?'View caption':'Details');
+  viewerCaptionBadge.textContent=hasCaption?'1':'0';
+  viewerCaptionBadge.setAttribute('aria-label',hasCaption?'1 caption':'No caption');
+  viewerCaptionToggle.setAttribute('aria-label',`${viewerCaptionToggleLabel.textContent} · ${hasCaption?'1 caption':'no caption'}`);
+  viewerCaptionPreview.textContent=hasCaption?photo.caption:'';
+  viewerCaptionPreview.hidden=!hasCaption;
+}
+viewerCaptionToggle.addEventListener('click',()=>setViewerCaptionExpanded(viewerCaptionToggle.getAttribute('aria-expanded')!=='true',true));
+document.querySelector('#saveViewerCaption').addEventListener('click', saveViewerCaption);
+viewerCaption.addEventListener('input', () => {
+  viewerCaptionCount.textContent = `${Array.from(viewerCaption.value).length.toLocaleString()} / 1,000`;
+  viewerCaptionStatus.textContent = '';
+});
+viewerCaption.addEventListener('keydown', (event) => {
+  if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
+    event.preventDefault();
+    saveViewerCaption();
+  }
+});
+
+function photoCard(photo, windowPosition) {
   const button = document.createElement('button');
   button.className = 'photo';
   button.type = 'button';
   button.dataset.photoId = photo.id;
-  button.setAttribute('aria-label', `Open ${photo.original_name}`);
+  button.dataset.photoName = photo.original_name;
+  button.dataset.photoIndex = String(windowPosition.itemIndex);
+  const mode = galleryDensityApi.applyCardMode(button, photo.original_name, galleryDensityLevel);
+  if (selectionMode) {
+    galleryWindowApi.applySelectionState(button, selectedIds.has(photo.id), true);
+  }
   const image = document.createElement('img');
-  image.src = photo.thumb;
+  const requestHints = galleryWindowApi.thumbnailHintsForRow(
+    windowPosition.rowIndex,
+    windowPosition.range,
+    windowPosition.columnIndex,
+  );
   image.alt = '';
-  image.loading = 'lazy';
+  image.width = 320;
+  image.height = 320;
+  image.loading = requestHints.loading;
   image.decoding = 'async';
-  image.fetchPriority = 'low';
+  image.fetchPriority = requestHints.fetchPriority;
+  // Configure scheduling hints before src so the browser sees the visible vs
+  // overscan priority when it queues this mounted thumbnail.
+  image.src = photo.thumb;
   button.append(image);
+  // Browse-only densities intentionally use thumbnail-only rows. Density
+  // changes rebuild the row window, restoring full controls at 3-across.
+  if (!mode.interactive) return button;
   if (photo.is_video) {
     button.classList.add('video-item');
     const badge = document.createElement('span');
@@ -531,93 +1304,168 @@ function photoCard(photo) {
     badge.setAttribute('aria-hidden', 'true');
     button.append(badge);
   }
+  if (photo.favorite) {
+    const favorite = document.createElement('span');
+    favorite.className = 'photo-favorite';
+    favorite.textContent = '★';
+    favorite.setAttribute('aria-label', 'Favorite');
+    button.append(favorite);
+  }
   const check = document.createElement('span');
   check.className = 'photo-check';
   check.setAttribute('aria-hidden', 'true');
   button.append(check);
-  button.addEventListener('click', () => selectionMode ? togglePhotoSelection(photo.id, button) : openPhoto(photo.id));
   return button;
 }
 
-async function loadPhotos(generation = galleryGeneration) {
+function loadPhotos(generation = galleryGeneration) {
+  return galleryMetadataRequests.run(generation, () => performPhotoLoad(generation));
+}
+
+async function performPhotoLoad(generation) {
   if (loadingPhotos || !hasMorePhotos) return;
   loadingPhotos = true;
+  gallery.setAttribute('aria-busy', 'true');
+  galleryStatus.textContent = loadedPhotos.length ? 'Loading more media…' : 'Loading media…';
+  if (!loadedPhotos.length) gallerySkeleton.hidden = false;
+  updateGallerySummary();
+  galleryPageError.hidden = true;
   loadMore.disabled = true;
   loadMore.textContent = 'Loading…';
-  const query = new URLSearchParams({ limit: pageSize });
-  if (nextCursor) query.set('cursor', nextCursor);
-  if (ownerView) query.set('view', ownerView);
+  const requestCursor = nextCursor;
+  const query = new URLSearchParams({limit: String(galleryMetadataBatchSize())});
+  if (requestCursor) query.set('cursor', requestCursor);
+  query.set('scope', ownerView);
+  if (mediaKind !== 'all') query.set('kind', mediaKind);
+  if (favoriteOnly) query.set('favorite', 'true');
   if (activeCollection && activeCollection !== 'deleted') query.set('collection', activeCollection);
   if (activePeriod && activeCollection !== 'deleted') query.set('period', activePeriod);
   const endpoint = activeCollection === 'deleted' ? '/api/photos/deleted' : '/api/photos';
   try {
-  const result = await api(`${endpoint}?${query}`);
-  if (generation !== galleryGeneration) return;
-  if (Number.isInteger(result.total)) totalPhotos = result.total;
-  emptyState.hidden = totalPhotos !== 0;
-  emptyState.querySelector('h2').textContent = activeCollection === 'deleted' ? 'Recently Deleted is empty.' : activeCollection ? 'Nothing in this collection yet.' : 'Your favorite moments belong here.';
-  emptyState.querySelector('p').textContent = activeCollection === 'deleted' ? 'Deleted photos stay here for 30 days before being removed forever.' : activeCollection ? 'Open a photo and tap Collections to add it here.' : 'Add a handful or a whole camera roll. We’ll arrange everything by date.';
-  emptyState.querySelector('[data-upload]').hidden = Boolean(activeCollection);
-  result.photos.forEach((photo) => {
-    const previousMonth = loadedPhotos.at(-1)?.captured_at?.slice(0, 7);
-    const currentMonth = photo.captured_at?.slice(0, 7);
-    if (currentMonth && currentMonth !== previousMonth) {
-      gallery.append(monthHeading(currentMonth));
+    const result = await api(`${endpoint}?${query}`, {signal: galleryAbortController?.signal});
+    if (generation !== galleryGeneration) return false;
+    if (Number.isInteger(result.total)) totalPhotos = result.total;
+    emptyState.hidden = totalPhotos !== 0;
+    configureEmptyState();
+    const responseCursor = result.next_cursor || null;
+    if (!galleryWindowApi.isSafeNextCursor(
+      requestCursor,
+      responseCursor,
+      result.has_more,
+      gallerySeenCursors,
+    )) {
+      const error = new Error('Media paging returned a repeated position. Refresh before loading more.');
+      error.code = 'gallery_cursor_repeated';
+      throw error;
     }
-    loadedPhotos.push(photo);
-    gallery.append(photoCard(photo));
-  });
-  nextCursor = result.next_cursor || null;
-  hasMorePhotos = Boolean(result.has_more && nextCursor);
-  loadMore.hidden = !hasMorePhotos;
-  if (!activeCollection) document.querySelector('#allPhotoCount').textContent = `${totalPhotos} item${totalPhotos === 1 ? '' : 's'}`;
-  if (activeCollection === 'deleted') document.querySelector('#deletedPhotoCount').textContent = `${totalPhotos} item${totalPhotos === 1 ? '' : 's'}`;
+    const appendPosition = loadedPhotos.length ? captureGalleryPosition() : null;
+    const additions = galleryWindowApi.uniqueMetadataItems(result.photos, loadedPhotoIds);
+    loadedPhotos.push(...additions);
+    if (responseCursor) gallerySeenCursors.add(responseCursor);
+    nextCursor = responseCursor;
+    hasMorePhotos = Boolean(result.has_more && nextCursor);
+    loadMore.hidden = !hasMorePhotos;
+    rebuildGalleryWindow({preserveRows: true, position: appendPosition, append: true});
+    galleryStatus.textContent = `${loadedPhotos.length} of ${totalPhotos} item${totalPhotos === 1 ? '' : 's'} loaded.`;
+    updateGallerySummary();
+    if (
+      !activeCollection && !activePeriod
+      && mediaKind === 'all' && !favoriteOnly
+    ) document.querySelector('#allPhotoCount').textContent = `${totalPhotos} item${totalPhotos === 1 ? '' : 's'}`;
+    if (activeCollection === 'deleted') document.querySelector('#deletedPhotoCount').textContent = `${totalPhotos} item${totalPhotos === 1 ? '' : 's'}`;
+    return true;
+  } catch (error) {
+    if (error?.name === 'AbortError' || generation !== galleryGeneration) return false;
+    if (error?.code === 'gallery_cursor_repeated') {
+      hasMorePhotos = false;
+      loadMore.hidden = true;
+    }
+    showGalleryLoadError(
+      error?.code === 'gallery_cursor_repeated'
+        ? 'initial'
+        : loadedPhotos.length ? 'page' : 'initial',
+    );
+    return false;
   } finally {
-    loadingPhotos = false;
-    loadMore.disabled = false;
-    loadMore.textContent = 'Show more';
+    if (generation === galleryGeneration) {
+      loadingPhotos = false;
+      gallery.setAttribute('aria-busy', 'false');
+      gallerySkeleton.hidden = true;
+      loadMore.disabled = false;
+      loadMore.textContent = 'Show more';
+      if (retryGallery.hidden && galleryPageError.hidden) updateGallerySummary();
+    }
   }
 }
 
 async function refreshPhotos() {
+  galleryAbortController?.abort();
+  galleryDensityAnchor.cancel();
+  galleryAutoPageGate.reset();
+  galleryAbortController = typeof AbortController === 'function' ? new AbortController() : null;
   galleryGeneration += 1;
   const generation = galleryGeneration;
+  galleryMetadataRequests.setGeneration(generation);
   nextCursor = null;
   hasMorePhotos = true;
   loadingPhotos = false;
   loadedPhotos = [];
+  loadedPhotoIds = new Set();
+  gallerySeenCursors = new Set();
   totalPhotos = 0;
-  gallery.innerHTML = '';
-  await loadPhotos(generation);
+  emptyState.hidden = true;
+  retryGallery.hidden = true;
+  galleryPageError.hidden = true;
+  galleryWindowFrame.cancel();
+  galleryWindowManager.releaseAll();
+  gallery.replaceChildren(galleryTopSpacer, galleryBottomSpacer);
+  rebuildGalleryWindow();
+  updateGallerySummary();
+  const loaded = await loadPhotos(generation);
   updateCollectionToolbar();
+  return loaded;
 }
 
 function captureGalleryPosition() {
-  const cards = [...gallery.querySelectorAll('.photo')];
-  const anchor = cards.find((card) => card.getBoundingClientRect().bottom > 0);
+  const model = galleryWindowManager.model();
+  const relativeScroll = Math.max(0, window.scrollY - galleryDocumentTop);
+  let rowIndex = galleryWindowApi.rowAtOffset(model, relativeScroll);
+  while (rowIndex < model.rows.length && model.rows[rowIndex].type !== 'photos') rowIndex += 1;
+  const itemIndex = model.rows[rowIndex]?.itemIndexes?.[0];
+  const photo = Number.isInteger(itemIndex) ? loadedPhotos[itemIndex] : null;
+  const rowOffset = model.rows[rowIndex]?.offset || 0;
   return {
-    id: anchor?.dataset.photoId || null,
-    top: anchor?.getBoundingClientRect().top || 0,
+    id: photo?.id || null,
+    top: galleryDocumentTop + rowOffset - window.scrollY,
     scrollY: window.scrollY,
   };
 }
 
+function restoreGalleryPositionNow(position) {
+  const location = position.id
+    ? galleryWindowManager.model().photoLocations.get(String(position.id))
+    : null;
+  if (location) {
+    window.scrollTo(0, Math.max(0, galleryDocumentTop + location.offset - position.top));
+  } else {
+    window.scrollTo(0, position.scrollY);
+  }
+  renderGalleryWindowNow();
+}
+
 function restoreGalleryPosition(position) {
-  requestAnimationFrame(() => requestAnimationFrame(() => {
-    const anchor = position.id
-      ? gallery.querySelector(`[data-photo-id="${CSS.escape(position.id)}"]`)
-      : null;
-    if (anchor) window.scrollBy(0, anchor.getBoundingClientRect().top - position.top);
-    else window.scrollTo(0, position.scrollY);
-  }));
+  requestAnimationFrame(() => requestAnimationFrame(() => restoreGalleryPositionNow(position)));
 }
 
 function removeLoadedPhotos(ids) {
   const removed = new Set(ids);
   loadedPhotos = loadedPhotos.filter((photo) => !removed.has(photo.id));
-  removed.forEach((id) => gallery.querySelector(`[data-photo-id="${CSS.escape(id)}"]`)?.remove());
+  removed.forEach((id) => loadedPhotoIds.delete(id));
+  rebuildGalleryWindow();
   totalPhotos = Math.max(0, totalPhotos - removed.size);
   emptyState.hidden = totalPhotos !== 0;
+  if (totalPhotos === 0) configureEmptyState();
+  updateGallerySummary();
 }
 
 function collectionCard(collection) {
@@ -625,12 +1473,17 @@ function collectionCard(collection) {
   button.className = `collection-card dynamic${activeCollection === collection.id ? ' selected' : ''}`;
   button.type = 'button';
   button.dataset.collection = collection.id;
+  if (activeCollection === collection.id) button.setAttribute('aria-current', 'true');
   const cover = document.createElement('span');
   cover.className = 'collection-cover';
   if (collection.cover) {
     const image = document.createElement('img');
     image.src = collection.cover;
     image.alt = '';
+    image.width = 284;
+    image.height = 186;
+    image.loading = 'lazy';
+    image.decoding = 'async';
     cover.append(image);
   } else {
     cover.classList.add('empty-cover');
@@ -645,34 +1498,48 @@ function collectionCard(collection) {
 }
 
 async function loadCollections() {
-  const result = await api(`/api/collections?view=${encodeURIComponent(ownerView)}`);
-  collections = result.collections;
+  const requestedOwnerView = ownerView;
+  const collectionViews = requestedOwnerView === 'visible'
+    ? ['', 'mine']
+    : [requestedOwnerView === 'mine' ? 'mine' : ''];
+  const listings = await Promise.all(collectionViews.map((view) => (
+    api(`/api/collections?view=${encodeURIComponent(view)}`)
+  )));
+  if (requestedOwnerView !== ownerView) return;
+  const collectionMap = new Map();
+  listings.forEach((listing) => {
+    (listing.collections || []).forEach((collection) => {
+      collectionMap.set(collection.id, collection);
+    });
+  });
+  collections = [...collectionMap.values()].sort((left, right) => (
+    left.name.localeCompare(right.name, undefined, {sensitivity: 'base'})
+    || left.id.localeCompare(right.id)
+  ));
   if (activeCollection && activeCollection !== 'deleted' && !collections.some((item) => item.id === activeCollection)) {
     activeCollection = '';
+    const cleanUrl = new URL(location.href);
+    cleanUrl.searchParams.delete('collection');
+    history.replaceState(null, '', cleanUrl);
+    if (collectionUnavailableNoticePending) showToast('That collection is unavailable.');
   }
+  collectionUnavailableNoticePending = false;
   collectionRail.querySelectorAll('.collection-card.dynamic').forEach((item) => item.remove());
   const deletedCard = collectionRail.querySelector('[data-collection="deleted"]');
   collections.forEach((collection) => collectionRail.insertBefore(collectionCard(collection), deletedCard));
-  const picker = document.querySelector('#collectionSelect');
-  picker.innerHTML = '<option value="">All media</option>';
-  collections.forEach((collection) => {
-    const option = document.createElement('option');
-    option.value = collection.id;
-    option.textContent = collection.name;
-    picker.append(option);
+  collectionRail.querySelectorAll('[data-collection]').forEach((item) => {
+    const selected = item.dataset.collection === activeCollection;
+    item.classList.toggle('selected', selected);
+    if (selected) item.setAttribute('aria-current', 'true'); else item.removeAttribute('aria-current');
   });
-  const deletedOption = document.createElement('option');
-  deletedOption.value = 'deleted';
-  deletedOption.textContent = 'Recently deleted';
-  picker.append(deletedOption);
-  picker.value = activeCollection;
-  collectionRail.querySelectorAll('[data-collection]').forEach((item) => item.classList.toggle('selected', item.dataset.collection === activeCollection));
-  api(`/api/photos/deleted?limit=1&view=${encodeURIComponent(ownerView)}`).then((result) => {
-    deletedPhotoTotal = result.total;
-    document.querySelector('#deletedPhotoCount').textContent = result.total ? `${result.total} item${result.total === 1 ? '' : 's'}` : 'Kept for 30 days';
+  api(`/api/photos/deleted?limit=1&scope=${encodeURIComponent(requestedOwnerView)}`).then((result) => {
+    if (requestedOwnerView !== ownerView) return;
+    deletedPhotoTotal = result.owned_total;
+    document.querySelector('#deletedPhotoCount').textContent = result.total ? `${result.total} item${result.total === 1 ? '' : 's'}` : 'Restorable for 30+ days';
     updateCollectionToolbar();
   }).catch(() => {});
   updateCollectionToolbar();
+  updateGallerySummary();
 }
 
 collectionRail.querySelectorAll('.collection-card:not(.dynamic)').forEach((card) => {
@@ -683,16 +1550,25 @@ async function selectCollection(id) {
   exitSelectionMode();
   activeCollection = id;
   activePeriod = '';
+  if (id === 'deleted') {
+    mediaKind = 'all';
+    favoriteOnly = false;
+  }
+  syncDiscoveryControls();
   collectionRail.querySelectorAll('[data-collection]').forEach((item) => {
     const selected = item.dataset.collection === id;
     item.classList.toggle('selected', selected);
     if (selected) item.setAttribute('aria-current', 'true'); else item.removeAttribute('aria-current');
   });
-  document.querySelector('#collectionSelect').value = id;
   const selectedCard = collectionRail.querySelector(`[data-collection="${CSS.escape(id)}"]`);
   if (selectedCard) selectedCard.scrollIntoView({behavior: 'smooth', inline: 'center', block: 'nearest'});
   updateCollectionToolbar();
-  await Promise.all([refreshPhotos(), loadTimeline()]);
+  updateGallerySummary();
+  try {
+    await Promise.all([refreshPhotos(), refreshTimelineIfOpen()]);
+  } catch (_error) {
+    showGalleryLoadError('initial');
+  }
 }
 
 function navigateCollection(direction) {
@@ -705,24 +1581,26 @@ function navigateCollection(direction) {
 
 document.querySelector('#previousCollection').addEventListener('click', () => navigateCollection(-1));
 document.querySelector('#nextCollection').addEventListener('click', () => navigateCollection(1));
-document.querySelector('#collectionSelect').addEventListener('change', (event) => selectCollection(event.target.value));
 
 function updateCollectionToolbar() {
   const selected = collections.find((collection) => collection.id === activeCollection);
   const allActions = document.querySelector('#allPhotoActions');
   const deletedActions = document.querySelector('#deletedCollectionActions');
   const customActions = document.querySelector('#customCollectionActions');
-  collectionToolbar.hidden = false;
+  // Header Add and Select already cover the default library. Keep collection
+  // management and recoverable-trash actions only in their relevant context.
+  collectionToolbar.hidden = activeCollection === '';
   allActions.hidden = activeCollection !== '';
   deletedActions.hidden = activeCollection !== 'deleted';
-  customActions.hidden = !selected;
+  customActions.hidden = !selected || !selected.is_mine;
   document.querySelector('#selectedCollectionName').textContent =
     activeCollection === '' ? 'All media' : activeCollection === 'deleted' ? 'Recently deleted' : selected?.name || 'Collection';
   document.querySelector('#selectFromAll').disabled = activeCollection === '' && totalPhotos === 0;
   document.querySelector('#selectDeleted').disabled = activeCollection === 'deleted' && totalPhotos === 0;
   document.querySelector('#restoreAllDeleted').disabled = deletedPhotoTotal === 0;
-  document.querySelector('#emptyDeleted').disabled = deletedPhotoTotal === 0;
+  document.querySelector('#emptyDeleted').disabled = true;
   if (selected) document.querySelector('#collectionPrivacy').textContent = selected.visibility === 'private' ? 'Share' : 'Only me';
+  updateGallerySummary();
 }
 
 function showToast(text) {
@@ -747,15 +1625,125 @@ function openCollectionEditor(mode) {
 document.querySelector('#newCollection').addEventListener('click', () => openCollectionEditor('create'));
 document.querySelector('#renameCollection').addEventListener('click', () => openCollectionEditor('rename'));
 
+let slideshowSubmitting = false;
+let slideshowStateRevision = 0;
+let slideshowDialogLifecycle = null;
+
+function slideshowIsOpen() {
+  return slideshowSheet.open || Boolean(slideshowSheet.__davidPiMobileHost);
+}
+
+function pauseSlideshowPreview() {
+  slideshowMusicPreview.pause();
+}
+
+function setSlideshowBusy(busy, {accepted = false, submitting = false} = {}) {
+  const create = document.querySelector('#createSlideshow');
+  const cancel = document.querySelector('#cancelSlideshow');
+  create.disabled = busy || !slideshowCollections.length;
+  create.textContent = submitting ? 'Submitting…' : accepted ? 'Video queued' : 'Create video';
+  cancel.disabled = submitting;
+  cancel.textContent = accepted ? 'Close' : 'Cancel';
+  document.querySelector('#closeSlideshow').disabled = submitting;
+  slideshowCollection.disabled = busy;
+  document.querySelector('#slideshowDuration').disabled = busy;
+  document.querySelector('#slideshowLayout').disabled = busy;
+  document.querySelector('#slideshowTransition').disabled = busy;
+  slideshowMusic.disabled = busy;
+  slideshowMusicPreview.controls = !busy;
+  document.querySelector('#slideshowLoop').disabled = busy;
+}
+
+function renderSlideshowJobState(state) {
+  slideshowStateRevision += 1;
+  slideshowMessage.textContent = state.message || '';
+  slideshowProgressBar.style.width = `${Math.max(0, Math.min(100, Number(state.progress) || 0))}%`;
+  slideshowProgress.setAttribute('aria-valuenow', String(Math.max(0, Math.min(100, Number(state.progress) || 0))));
+  if (state.phase === 'submitting') {
+    slideshowProgress.hidden = false;
+    setSlideshowBusy(true, {submitting: true});
+  } else if (state.active) {
+    slideshowProgress.hidden = false;
+    setSlideshowBusy(true, {accepted: true});
+  } else {
+    slideshowProgress.hidden = state.phase !== 'completed';
+    setSlideshowBusy(false);
+  }
+}
+
+async function handleSlideshowCompletion(job) {
+  const wasOpen = slideshowIsOpen();
+  setSlideshowBusy(false);
+  if (wasOpen) slideshowDialogLifecycle.close();
+  let refreshed = false;
+  try {
+    await loadCollections();
+    refreshed = true;
+    if (wasOpen) {
+      const videos = collections.find((collection) => collection.name.toLowerCase() === 'videos');
+      if (videos) await selectCollection(videos.id);
+    } else if (!activeCollection) {
+      await refreshPhotos();
+    }
+  } catch (_error) {
+    // Publication already succeeded. A later manual refresh can recover the view.
+  }
+  showToast(refreshed
+    ? 'Your slideshow was saved in Videos.'
+    : 'Your slideshow was saved in Videos. Refresh to see it.');
+}
+
+function handleSlideshowFailure(job) {
+  setSlideshowBusy(false);
+  if (!slideshowIsOpen()) showToast(job.message || 'The slideshow job could not be checked.');
+}
+
+const slideshowJobController = window.DavidPiSlideshowJobs?.create({
+  submit: (payload) => api('/api/slideshows', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(payload),
+  }),
+  poll: (jobId) => api(`/api/slideshows/${jobId}`),
+  onState: renderSlideshowJobState,
+  onComplete: handleSlideshowCompletion,
+  onFailure: handleSlideshowFailure,
+});
+
+slideshowDialogLifecycle = window.DavidPiSlideshowJobs?.bindDialogLifecycle({
+  dialog: slideshowSheet,
+  pause: pauseSlideshowPreview,
+  isSubmitting: () => slideshowSubmitting,
+  onBlockedClose: () => {
+    slideshowMessage.textContent = 'Waiting for David-Pi to accept the video job…';
+  },
+}) || {
+  close() {
+    pauseSlideshowPreview();
+    if (slideshowIsOpen()) slideshowSheet.close();
+  },
+};
+
 async function openSlideshow() {
-  slideshowMessage.textContent = 'Loading your media collections…';
-  slideshowProgress.hidden = true;
-  document.querySelector('#createSlideshow').disabled = true;
+  const activeJob = slideshowJobController?.activeJobId();
+  if (activeJob) renderSlideshowJobState(slideshowJobController.snapshot());
+  else {
+    slideshowMessage.textContent = 'Loading your media collections…';
+    slideshowProgress.hidden = true;
+    setSlideshowBusy(true);
+  }
   slideshowSheet.showModal();
+  if (!slideshowJobController) {
+    slideshowMessage.textContent = 'The video controls did not load. Refresh this page before creating a video.';
+    return;
+  }
+  slideshowJobController.resume();
+  const stateRevision = slideshowStateRevision;
   try {
     const result = await api('/api/slideshows/options');
+    slideshowCollections = result.collections || [];
     slideshowCollection.innerHTML = '';
-    result.collections.forEach((collection) => {
+    slideshowCollections.forEach((collection) => {
       const option = document.createElement('option');
       option.value = collection.id;
       const parts = [];
@@ -772,30 +1760,26 @@ async function openSlideshow() {
       option.textContent = `${track.title} — ${track.artist}`;
       slideshowMusic.append(option);
     });
-    slideshowMusic.value = '';
-    slideshowMusicPreview.pause();
-    slideshowMusicPreview.removeAttribute('src');
-    slideshowMusicPreview.hidden = true;
-    slideshowMusicCredit.textContent = 'Choose a track, then preview it before creating the video.';
-    if (result.collections.some((collection) => collection.id === activeCollection)) slideshowCollection.value = activeCollection;
-    slideshowMessage.textContent = result.collections.length ? '' : 'Create a collection with at least one photo or video first.';
-    document.querySelector('#createSlideshow').disabled = !result.collections.length;
+    if (!slideshowJobController.activeJobId()) {
+      slideshowMusic.value = '';
+      pauseSlideshowPreview();
+      slideshowMusicPreview.removeAttribute('src');
+      slideshowMusicPreview.hidden = true;
+      slideshowMusicCredit.textContent = 'Choose a track, then preview it before creating the video.';
+      if (result.collections.some((collection) => collection.id === activeCollection)) slideshowCollection.value = activeCollection;
+      if (stateRevision === slideshowStateRevision) {
+        slideshowMessage.textContent = result.collections.length ? '' : 'Create a collection with at least one photo or video first.';
+      }
+      setSlideshowBusy(false);
+    } else {
+      setSlideshowBusy(true, {accepted: true});
+    }
   } catch (error) {
-    slideshowMessage.textContent = error.message;
+    if (!slideshowJobController.activeJobId() && stateRevision === slideshowStateRevision) {
+      slideshowMessage.textContent = error.message;
+      setSlideshowBusy(false);
+    }
   }
-}
-
-function setSlideshowBusy(busy) {
-  document.querySelector('#createSlideshow').disabled = busy;
-  document.querySelector('#cancelSlideshow').disabled = busy;
-  document.querySelector('#closeSlideshow').disabled = busy;
-  slideshowCollection.disabled = busy;
-  document.querySelector('#slideshowDuration').disabled = busy;
-  document.querySelector('#slideshowLayout').disabled = busy;
-  document.querySelector('#slideshowTransition').disabled = busy;
-  slideshowMusic.disabled = busy;
-  slideshowMusicPreview.controls = !busy;
-  document.querySelector('#slideshowLoop').disabled = busy;
 }
 
 slideshowMusic.addEventListener('change', () => {
@@ -812,62 +1796,41 @@ slideshowMusic.addEventListener('change', () => {
   slideshowMusicCredit.textContent = `${track.title} by ${track.artist} · ${track.license}`;
 });
 
-async function watchSlideshow(jobId) {
-  while (true) {
-    const job = await api(`/api/slideshows/${jobId}`);
-    slideshowProgressBar.style.width = `${Math.max(5, job.progress || 0)}%`;
-    slideshowMessage.textContent = job.message || 'Creating your video…';
-    if (job.status === 'completed') {
-      setSlideshowBusy(false);
-      slideshowSheet.close();
-      await loadCollections();
-      const videos = collections.find((collection) => collection.name.toLowerCase() === 'videos');
-      if (videos) await selectCollection(videos.id);
-      showToast('Your slideshow was saved in Videos.');
-      return;
-    }
-    if (job.status === 'failed') {
-      setSlideshowBusy(false);
-      slideshowMessage.textContent = `${job.error || 'The slideshow could not be created.'} Nothing was removed.`;
-      return;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 1500));
-  }
-}
-
 document.querySelector('#openSlideshow').addEventListener('click', openSlideshow);
 function closeSlideshow() {
-  slideshowMusicPreview.pause();
-  slideshowSheet.close();
+  slideshowDialogLifecycle.close();
 }
 document.querySelector('#closeSlideshow').addEventListener('click', closeSlideshow);
 document.querySelector('#cancelSlideshow').addEventListener('click', closeSlideshow);
 document.querySelector('#createSlideshow').addEventListener('click', async () => {
-  const button = document.querySelector('#createSlideshow');
-  setSlideshowBusy(true);
-  button.textContent = 'Creating…';
-  slideshowProgress.hidden = false;
-  slideshowProgressBar.style.width = '5%';
-  slideshowMessage.textContent = 'Getting your media ready…';
+  if (!slideshowJobController) {
+    slideshowMessage.textContent = 'The video controls did not load. Refresh this page before creating a video.';
+    return;
+  }
+  if (slideshowJobController.activeJobId()) {
+    renderSlideshowJobState(slideshowJobController.snapshot());
+    slideshowJobController.resume();
+    return;
+  }
+  slideshowSubmitting = true;
+  pauseSlideshowPreview();
+  setSlideshowBusy(true, {submitting: true});
   try {
-    const result = await api('/api/slideshows', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({
-        collection_id: slideshowCollection.value,
-        duration_seconds: Number(document.querySelector('#slideshowDuration').value),
-        layout: document.querySelector('#slideshowLayout').value,
-        transition: document.querySelector('#slideshowTransition').value,
-        music_id: slideshowMusic.value,
-        loop_playback: document.querySelector('#slideshowLoop').checked,
-      }),
+    const result = await slideshowJobController.submit({
+      collection_id: slideshowCollection.value,
+      collection_version: slideshowCollections.find(
+        (collection) => collection.id === slideshowCollection.value,
+      )?.version,
+      duration_seconds: Number(document.querySelector('#slideshowDuration').value),
+      layout: document.querySelector('#slideshowLayout').value,
+      transition: document.querySelector('#slideshowTransition').value,
+      music_id: slideshowMusic.value,
+      loop_playback: document.querySelector('#slideshowLoop').checked,
     });
-    await watchSlideshow(result.id);
-  } catch (error) {
-    setSlideshowBusy(false);
-    slideshowMessage.textContent = `${error.message} Nothing was changed.`;
+    if (!result.accepted) setSlideshowBusy(false);
   } finally {
-    button.textContent = 'Create video';
+    slideshowSubmitting = false;
+    if (slideshowJobController.activeJobId()) setSlideshowBusy(true, {accepted: true});
   }
 });
 document.querySelector('#createFromOrganize').addEventListener('click', () => {
@@ -885,7 +1848,8 @@ document.querySelector('#saveCollection').addEventListener('click', async () => 
   button.disabled = true;
   try {
     if (editorMode === 'rename') {
-      await api(`/api/collections/${activeCollection}`, { method: 'PATCH', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({name, visibility:document.querySelector('#collectionVisibility').value}) });
+      const selected = collections.find((collection) => collection.id === activeCollection);
+      await api(`/api/collections/${activeCollection}`, { method: 'PATCH', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({name, visibility:document.querySelector('#collectionVisibility').value, version:selected?.version}) });
     } else {
       const created = await api('/api/collections', { method: 'POST', headers: {'Content-Type':'application/json'}, body:JSON.stringify({name,visibility:document.querySelector('#collectionVisibility').value}) });
       await loadCollections();
@@ -950,7 +1914,7 @@ document.querySelector('#deleteCollection').addEventListener('click', () => {
     title: `Delete “${selected.name}”?`,
     text: 'The collection will disappear, but every item inside it will remain safely in All media.',
     action: async () => {
-      await api(`/api/collections/${selected.id}`, {method: 'DELETE'});
+      await api(`/api/collections/${selected.id}`, {method: 'DELETE', headers:{'Content-Type':'application/json'}, body:JSON.stringify({version:selected.version})});
       activeCollection = '';
       await loadCollections();
       await refreshPhotos();
@@ -962,13 +1926,25 @@ function updateSelectionBar() {
   const bar = document.querySelector('#selectionBar');
   bar.hidden = !selectionMode;
   document.querySelector('#selectionCount').textContent = `${selectedIds.size} selected`;
-  document.querySelector('#batchOrganize').hidden = activeCollection === 'deleted';
-  document.querySelector('#batchPrivacy').hidden = activeCollection === 'deleted';
-  document.querySelector('#batchShare').hidden = activeCollection === 'deleted';
-  document.querySelector('#batchRestore').hidden = activeCollection !== 'deleted';
-  document.querySelector('#batchDelete').textContent = activeCollection === 'deleted' ? 'Delete forever' : 'Delete';
+  const selectedPhotos = loadedPhotos.filter((photo) => selectedIds.has(photo.id));
+  const onlyOwned = !selectedPhotos.length || selectedPhotos.every((photo) => photo.is_mine);
+  const allClaimed = !selectedPhotos.length || selectedPhotos.every((photo) => photo.ownership_status === 'owned');
+  document.querySelector('#batchOrganize').hidden = activeCollection === 'deleted' || !allClaimed;
+  document.querySelector('#batchPrivacy').hidden = activeCollection === 'deleted' || !onlyOwned;
+  document.querySelector('#batchShare').hidden = activeCollection === 'deleted' || !onlyOwned;
+  document.querySelector('#batchRestore').hidden = activeCollection !== 'deleted' || !onlyOwned;
+  const batchDelete = document.querySelector('#batchDelete');
+  batchDelete.hidden = !onlyOwned || activeCollection === 'deleted';
+  batchDelete.textContent = 'Delete';
+  document.querySelector('#selectAllMedia').textContent = totalPhotos > 500 ? 'Select first 500' : 'Select all';
   document.querySelector('#toggleSelect').textContent = selectionMode ? 'Cancel' : 'Select';
+  document.querySelector('#toggleSelect').setAttribute('aria-pressed', selectionMode ? 'true' : 'false');
+  gallery.querySelectorAll('.photo').forEach((card) => {
+    if (selectionMode) card.setAttribute('aria-pressed', selectedIds.has(card.dataset.photoId) ? 'true' : 'false');
+    else card.removeAttribute('aria-pressed');
+  });
   document.body.classList.toggle('selecting', selectionMode);
+  updateGalleryDensityControls();
 }
 
 function togglePhotoSelection(photoId, card) {
@@ -1014,17 +1990,24 @@ function exitSelectionMode() {
   updateSelectionBar();
 }
 
+function enterSelectionMode() {
+  const switchedToInteractive = galleryDensityLevel !== 0;
+  if (switchedToInteractive) setGalleryDensity(0);
+  selectionMode = true;
+  updateSelectionBar();
+  if (switchedToInteractive) {
+    showToast('Switched to 3 across so media can be selected.');
+  }
+}
+
 document.querySelector('#toggleSelect').addEventListener('click', () => {
   if (selectionMode) exitSelectionMode();
-  else { selectionMode = true; updateSelectionBar(); }
+  else enterSelectionMode();
 });
 
 function beginSelection() {
-  if (!selectionMode) {
-    selectionMode = true;
-    updateSelectionBar();
-  }
-  gallery.scrollIntoView({behavior: 'smooth', block: 'start'});
+  if (!selectionMode) enterSelectionMode();
+  requestAnimationFrame(() => gallery.scrollIntoView({behavior: 'smooth', block: 'start'}));
 }
 
 async function loadSelectionLimit() {
@@ -1087,23 +2070,7 @@ document.querySelector('#restoreAllDeleted').addEventListener('click', () => {
   });
 });
 document.querySelector('#emptyDeleted').addEventListener('click', () => {
-  if (!deletedPhotoTotal) return;
-  const count = deletedPhotoTotal;
-  askConfirmation({
-    title: `Delete ${count} item${count === 1 ? '' : 's'} forever?`,
-    text: 'Every photo in Recently Deleted will be permanently removed from David-Pi. This cannot be undone.',
-    button: 'Delete forever',
-    action: async () => {
-      const result = await api('/api/photos/purge-all', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({confirmation: 'empty-recently-deleted'}),
-      });
-      await refreshPhotos();
-      await loadCollections();
-      showToast(`${result.count} item${result.count === 1 ? '' : 's'} permanently deleted.`);
-    },
-  });
+  showToast('Permanent deletion stays unavailable until backup and retention verification passes.');
 });
 
 function organizationChanges() {
@@ -1111,7 +2078,12 @@ function organizationChanges() {
   organizeDesired.forEach((desired, collectionId) => {
     const original = organizeBaseline.get(collectionId);
     if (desired === original || desired === 'mixed') return;
-    changes.push({ collection_id: collectionId, action: desired === 'all' ? 'add' : 'remove' });
+    const collection = organizerCatalog.find((item) => item.id === collectionId);
+    changes.push({
+      collection_id: collectionId,
+      collection_version: collection?.version,
+      action: desired === 'all' ? 'add' : 'remove',
+    });
   });
   return changes;
 }
@@ -1128,13 +2100,9 @@ function organizerCollectionFallback() {
     serverCatalog.forEach((collection) => merged.set(String(collection.id), collection));
   } catch (_error) {}
   collections.forEach((collection) => merged.set(collection.id, collection));
-  // The collection picker and rail are already filtered by the server for the
-  // current viewer. Reading them gives Android WebView a second, independent
-  // source when its organizer request is restored from an empty/stale cache.
-  document.querySelectorAll('#collectionSelect option').forEach((option) => {
-    if (!option.value || option.value === 'deleted') return;
-    if (!merged.has(option.value)) merged.set(option.value, {id: option.value, name: option.textContent});
-  });
+  // The collection rail is already filtered by the server for the current
+  // viewer. Reading it gives Android WebView an independent fallback when its
+  // organizer request is restored from an empty or stale cache.
   collectionRail.querySelectorAll('.collection-card.dynamic[data-collection]').forEach((card) => {
     const id = card.dataset.collection;
     const name = card.querySelector('strong')?.textContent?.trim();
@@ -1144,7 +2112,7 @@ function organizerCollectionFallback() {
 }
 
 function renderOrganizerCollections(membershipCollections) {
-  const liveChecks = organizeSheet.querySelector('#collectionChecks') || collectionChecks;
+  const liveChecks = organizerRoot().querySelector('#collectionChecks') || collectionChecks;
   const catalog = membershipCollections.length ? membershipCollections : organizerCollectionFallback();
   const existingRows = new Map(
     [...liveChecks.querySelectorAll('.collection-check')].map((label) => [
@@ -1196,7 +2164,7 @@ function renderOrganizerCollections(membershipCollections) {
 
 function ensureOrganizerCollectionsVisible() {
   if (!organizerIsOpen() || !organizerCatalog.length) return;
-  const liveChecks = organizeSheet.querySelector('#collectionChecks') || collectionChecks;
+  const liveChecks = organizerRoot().querySelector('#collectionChecks') || collectionChecks;
   if (liveChecks.querySelectorAll('.collection-check').length === organizerCatalog.length) return;
   renderOrganizerCollections(organizerCatalog);
 }
@@ -1204,53 +2172,30 @@ function ensureOrganizerCollectionsVisible() {
 function startOrganizerWatchdog() {
   if (organizerWatchdog) organizerWatchdog.disconnect();
   organizerWatchdog = new MutationObserver(() => ensureOrganizerCollectionsVisible());
-  organizerWatchdog.observe(organizeSheet, {childList: true, subtree: true});
+  organizerWatchdog.observe(organizerRoot(), {childList: true, subtree: true});
   requestAnimationFrame(ensureOrganizerCollectionsVisible);
   setTimeout(ensureOrganizerCollectionsVisible, 150);
   setTimeout(ensureOrganizerCollectionsVisible, 700);
 }
 
 function organizerRoot() {
-  return organizeSheet;
+  return organizeSheet.__davidPiMobileHost || organizeSheet;
 }
 
 function organizerIsOpen() {
-  return !organizeSheet.hidden;
+  return organizeSheet.open || Boolean(organizeSheet.__davidPiMobileHost);
 }
 
 function showOrganizerSheet() {
-  if (organizerBackdrop.parentElement !== document.body) document.body.append(organizerBackdrop);
-  if (organizeSheet.parentElement !== document.body) document.body.append(organizeSheet);
-  organizerBackdrop.hidden = false;
-  organizeSheet.hidden = false;
-  const viewport = window.visualViewport;
-  const height = Math.max(420, Math.round((viewport?.height || window.innerHeight) - 32));
-  const width = Math.max(280, Math.min(500, Math.round((viewport?.width || window.innerWidth) - 24)));
-  // Android System WebView can resolve a vh-based max-height to 0 after this
-  // sheet is reparented into document.body. The authorized collection rows
-  // remain in the DOM, but the zero-height grid paints underneath the buttons.
-  // Resolve the limit to pixels from the live visual viewport instead. This is
-  // also valid in ordinary browsers and keeps large collection lists scrollable.
-  const collectionListHeight = Math.max(140, Math.round((viewport?.height || window.innerHeight) * 0.4));
-  collectionChecks.style.setProperty('max-height', `${collectionListHeight}px`, 'important');
-  organizeSheet.style.setProperty('position', 'fixed', 'important');
-  organizeSheet.style.setProperty('z-index', '2147483000', 'important');
-  organizeSheet.style.setProperty('top', `${Math.round((viewport?.offsetTop || 0) + 16)}px`, 'important');
-  organizeSheet.style.setProperty('left', '50%', 'important');
-  organizeSheet.style.setProperty('bottom', 'auto', 'important');
-  organizeSheet.style.setProperty('width', `${width}px`, 'important');
-  organizeSheet.style.setProperty('height', `${height}px`, 'important');
-  organizeSheet.style.setProperty('min-height', '0', 'important');
-  organizeSheet.style.setProperty('max-height', `${height}px`, 'important');
-  organizeSheet.style.setProperty('margin', '0', 'important');
-  organizeSheet.style.setProperty('transform', 'translateX(-50%)', 'important');
-  organizeSheet.style.setProperty('overflow-y', 'auto', 'important');
+  // Use the same modal/top-layer host as the viewer and collection editor.
+  // A fixed section cannot ever appear above a native modal, regardless of z-index.
+  if (!organizerIsOpen()) organizeSheet.showModal();
   document.documentElement.classList.add('organizer-is-open');
   requestAnimationFrame(() => document.querySelector('#closeOrganizer')?.focus({preventScroll: true}));
 }
 
 function hideOrganizerSheet() {
-  organizeSheet.hidden = true;
+  if (organizerIsOpen()) organizeSheet.close();
   organizerBackdrop.hidden = true;
   document.documentElement.classList.remove('organizer-is-open');
   if (organizerWatchdog) organizerWatchdog.disconnect();
@@ -1268,7 +2213,7 @@ async function openOrganizer(ids = null, previousDesired = null, selectCollectio
   saveOrganization.textContent = 'Save changes';
   saveOrganization.disabled = true;
   document.querySelector('#createFromOrganize').disabled = true;
-  document.querySelector('#organizeTitle').textContent = batch ? `Organize ${organizeIds.length} items` : 'Organize media';
+  document.querySelector('#organizeTitle').textContent = batch ? `Organize ${organizeIds.length} item${organizeIds.length === 1 ? '' : 's'}` : 'Organize media';
   document.querySelector('#organizeCopy').textContent = 'Choose where the selected media belongs, then save your changes.';
   const immediateCatalog = organizerCollectionFallback().map((collection) => ({
     ...collection, state: collection.id === activeCollection ? 'all' : 'none',
@@ -1290,7 +2235,7 @@ async function openOrganizer(ids = null, previousDesired = null, selectCollectio
     let authorizedCollections = Array.isArray(result.collections) ? result.collections : [];
     if (!authorizedCollections.length) {
       const listings = await Promise.allSettled([
-        api(`/api/collections?view=${encodeURIComponent(ownerView)}`),
+        api(`/api/collections?view=${encodeURIComponent(ownerView === 'mine' ? 'mine' : '')}`),
         api('/api/collections?view=mine'),
       ]);
       const merged = new Map();
@@ -1356,11 +2301,9 @@ function closeOrganizer() {
 document.querySelector('#closeOrganizer').addEventListener('click', closeOrganizer);
 document.querySelector('#cancelOrganizer').addEventListener('click', closeOrganizer);
 organizerBackdrop.addEventListener('click', closeOrganizer);
-document.addEventListener('keydown', (event) => {
-  if (event.key === 'Escape' && organizerIsOpen()) {
-    event.preventDefault();
-    closeOrganizer();
-  }
+organizeSheet.addEventListener('cancel', (event) => {
+  event.preventDefault();
+  closeOrganizer();
 });
 
 saveOrganization.addEventListener('click', async () => {
@@ -1375,7 +2318,8 @@ saveOrganization.addEventListener('click', async () => {
   organizerRoot().querySelectorAll('input, button').forEach((control) => { if (control !== saveOrganization) control.disabled = true; });
   try {
     const result = await api('/api/collections/membership', {
-      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ids: organizeIds, changes}),
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({items: versionedPhotoItems(organizeIds), changes}),
     });
     let confirmation = 'Collection changes saved.';
     if (changes.length === 1) {
@@ -1414,7 +2358,7 @@ saveOrganization.addEventListener('click', async () => {
 });
 
 async function restore(ids) {
-  await api('/api/photos/restore', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ids})});
+  await api('/api/photos/restore', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({items:versionedPhotoItems(ids)})});
   if (viewer.open) viewer.close();
   exitSelectionMode();
   await refreshPhotos();
@@ -1431,18 +2375,23 @@ document.querySelector('#viewerPrivacy').addEventListener('click', async () => {
   const visibility = photo.visibility === 'private' ? 'shared' : 'private';
   privacyButton.disabled = true;
   try {
-    await api('/api/photos/visibility', {method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids:[photo.id],visibility})});
+    const result = await api('/api/photos/visibility', {method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({items:versionedPhotoItems([photo.id]),visibility})});
+    applyReturnedMediaVersions(result);
     photo.visibility = visibility;
     showToast(visibility === 'private' ? 'Media is now private.' : 'Media shared.');
 
-    // "All" contains shared media only. Remove a newly private item locally so
+    // The Shared view contains shared media only. Remove a newly private item locally so
     // the gallery stays truthful, but keep the viewer open on the next item.
-    if (visibility === 'private' && ownerView === '') {
+    if (visibility === 'private' && ownerView === 'shared') {
       const removedIndex = currentPhotoIndex;
       loadedPhotos.splice(removedIndex, 1);
+      loadedPhotoIds.delete(photo.id);
       totalPhotos = Math.max(0, totalPhotos - 1);
-      gallery.querySelector(`[data-photo-id="${CSS.escape(photo.id)}"]`)?.remove();
-      if (!activeCollection) {
+      rebuildGalleryWindow();
+      if (
+        !activeCollection && !activePeriod
+        && mediaKind === 'all' && !favoriteOnly
+      ) {
         document.querySelector('#allPhotoCount').textContent = `${totalPhotos} item${totalPhotos === 1 ? '' : 's'}`;
       }
       if (loadedPhotos.length < totalPhotos && hasMorePhotos) await loadPhotos();
@@ -1462,17 +2411,44 @@ document.querySelector('#viewerPrivacy').addEventListener('click', async () => {
     privacyButton.disabled = false;
   }
 });
+document.querySelector('#addToMytube').addEventListener('click', async () => {
+  const photo = loadedPhotos[currentPhotoIndex];
+  const button = document.querySelector('#addToMytube');
+  if (!photo?.is_video || !photo.is_mine) return;
+  button.disabled = true;
+  try {
+    if (photo.mytube_linked) {
+      await api(`/api/mytube/media-links/${encodeURIComponent(photo.id)}`, {method: 'DELETE'});
+      photo.mytube_linked = false;
+      showToast('Removed from MyTube. The original video is unchanged.');
+    } else {
+      await api('/api/mytube/media-links', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({media_id: photo.id}),
+      });
+      photo.mytube_linked = true;
+      showToast('Added to MyTube.');
+    }
+    button.textContent = photo.mytube_linked ? 'Remove from MyTube' : 'Add to MyTube';
+  } catch (error) {
+    showToast(error.message);
+  } finally {
+    button.disabled = false;
+  }
+});
 document.querySelector('#batchPrivacy').addEventListener('click', async () => {
   const ids=[...selectedIds]; if(!ids.length)return;
   const savedPosition=captureGalleryPosition();
-  await api('/api/photos/visibility',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids,visibility:'private'})});
-  if(ownerView==='') removeLoadedPhotos(ids); else loadedPhotos.forEach((photo)=>{if(ids.includes(photo.id))photo.visibility='private';});
+  const result = await api('/api/photos/visibility',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({items:versionedPhotoItems(ids),visibility:'private'})});
+  applyReturnedMediaVersions(result);
+  if(ownerView==='shared') removeLoadedPhotos(ids); else loadedPhotos.forEach((photo)=>{if(ids.includes(photo.id))photo.visibility='private';});
   showToast(`${ids.length} item${ids.length===1?' is':'s are'} now private.`); exitSelectionMode(); await loadCollections(); restoreGalleryPosition(savedPosition);
 });
 document.querySelector('#batchShare').addEventListener('click', async () => {
   const ids=[...selectedIds]; if(!ids.length)return;
   const savedPosition=captureGalleryPosition();
-  await api('/api/photos/visibility',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids,visibility:'shared'})});
+  const result = await api('/api/photos/visibility',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({items:versionedPhotoItems(ids),visibility:'shared'})});
+  applyReturnedMediaVersions(result);
   loadedPhotos.forEach((photo)=>{if(ids.includes(photo.id))photo.visibility='shared';});
   showToast(`${ids.length} item${ids.length===1?' was':'s were'} shared.`); exitSelectionMode(); await loadCollections(); restoreGalleryPosition(savedPosition);
 });
@@ -1484,12 +2460,16 @@ document.querySelector('#deletePhoto').addEventListener('click', () => {
   if (currentPhotoIndex < 0) return;
   const photo = loadedPhotos[currentPhotoIndex];
   const permanent = activeCollection === 'deleted';
+  if (permanent) {
+    showToast('Permanent deletion stays unavailable until backup and retention verification passes.');
+    return;
+  }
   askConfirmation({
     title: permanent ? 'Delete forever?' : 'Move to Recently Deleted?',
-    text: permanent ? `“${photo.original_name}” will be permanently removed from the Pi. This cannot be undone.` : `“${photo.original_name}” can be restored for the next 30 days.`,
+    text: permanent ? `“${photo.original_name}” will be permanently removed from the Pi. This cannot be undone.` : `“${photo.original_name}” stays in Recently Deleted until an owner restores or permanently deletes it.`,
     button: permanent ? 'Delete forever' : 'Move photo',
     action: async () => {
-      const result = await api(permanent ? '/api/photos/purge' : '/api/photos/trash', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ids: [photo.id]})});
+      const result = await api('/api/photos/trash', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({items:versionedPhotoItems([photo.id])})});
       if (result.count !== 1) throw new Error(permanent ? 'This item could not be permanently deleted.' : 'This item could not be moved.');
       viewer.close();
       await refreshPhotos();
@@ -1503,13 +2483,17 @@ document.querySelector('#batchDelete').addEventListener('click', () => {
   const ids = [...selectedIds];
   if (!ids.length) return;
   const permanent = activeCollection === 'deleted';
+  if (permanent) {
+    showToast('Permanent deletion stays unavailable until backup and retention verification passes.');
+    return;
+  }
   askConfirmation({
     title: permanent ? `Delete ${ids.length} items forever?` : `Delete ${ids.length} items?`,
-    text: permanent ? 'These originals will be permanently removed from the Pi. This cannot be undone.' : 'They will remain in Recently Deleted for 30 days and can be restored.',
+    text: permanent ? 'These originals will be permanently removed from the Pi. This cannot be undone.' : 'They will remain in Recently Deleted until an owner restores or permanently deletes them.',
     button: permanent ? 'Delete forever' : 'Move items',
     action: async () => {
       const savedPosition = captureGalleryPosition();
-      const result = await api(permanent ? '/api/photos/purge' : '/api/photos/trash', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ids})});
+      const result = await api('/api/photos/trash', {method: 'POST', headers: {'Content-Type':'application/json'}, body:JSON.stringify({items:versionedPhotoItems(ids)})});
       if (result.count !== ids.length) {
         const completed = Number(result.count || 0);
         throw new Error(`${completed} of ${ids.length} items were changed. Refresh and try the remaining items.`);
@@ -1527,108 +2511,389 @@ document.querySelector('#batchDelete').addEventListener('click', () => {
 document.querySelector('#collectionPrivacy').addEventListener('click', async () => {
   const selected=collections.find((collection)=>collection.id===activeCollection); if(!selected)return;
   const visibility=selected.visibility==='private'?'shared':'private';
-  await api(`/api/collections/${selected.id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:selected.name,visibility})});
+  await api(`/api/collections/${selected.id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:selected.name,visibility,version:selected.version})});
   showToast(visibility==='private'?'Collection is now private. Its existing media stayed unchanged.':'Collection shared.');
   await loadCollections(); updateCollectionToolbar();
 });
+
+function syncDiscoveryControls() {
+  document.querySelector('.media-discovery').hidden = activeCollection === 'deleted';
+  mediaFilters.hidden = activeCollection === 'deleted';
+  document.querySelectorAll('[data-kind]').forEach((button) => {
+    const selected = button.dataset.kind === mediaKind;
+    button.classList.toggle('selected', selected);
+    button.setAttribute('aria-pressed', selected ? 'true' : 'false');
+  });
+  const favoriteButton = document.querySelector('[data-favorite]');
+  favoriteButton.classList.toggle('selected', favoriteOnly);
+  favoriteButton.setAttribute('aria-pressed', favoriteOnly ? 'true' : 'false');
+}
+
+async function refreshDiscovery() {
+  exitSelectionMode();
+  updateGallerySummary();
+  try {
+    await Promise.all([refreshPhotos(), refreshTimelineIfOpen()]);
+  } catch (_error) {
+    showGalleryLoadError('initial');
+  }
+}
+
+document.querySelector('.media-smart-views').addEventListener('click', async (event) => {
+  const kindButton = event.target.closest('[data-kind]');
+  const favoriteButton = event.target.closest('[data-favorite]');
+  if (!kindButton && !favoriteButton) return;
+  if (kindButton) {
+    if (kindButton.dataset.kind === mediaKind) return;
+    mediaKind = kindButton.dataset.kind;
+  } else {
+    favoriteOnly = !favoriteOnly;
+  }
+  syncDiscoveryControls();
+  await refreshDiscovery();
+});
+
+syncDiscoveryControls();
 document.querySelector('#mediaOwners').addEventListener('click',async(event)=>{
   const button=event.target.closest('[data-owner]'); if(!button)return;
-  ownerView=button.dataset.owner||''; activePeriod=''; document.querySelectorAll('#mediaOwners [data-owner]').forEach((item)=>item.classList.toggle('selected',item===button));
-  await loadCollections(); await Promise.all([refreshPhotos(),loadTimeline()]);
+  ownerView=button.dataset.owner||'visible'; activePeriod=''; document.querySelectorAll('#mediaOwners [data-owner]').forEach((item)=>{const selected=item===button;item.classList.toggle('selected',selected);item.setAttribute('aria-pressed',selected?'true':'false');});
+  updateGallerySummary();
+  try {
+    await Promise.all([loadCollections(),refreshPhotos(),refreshTimelineIfOpen()]);
+  } catch (_error) {
+    showGalleryLoadError('initial');
+  }
 });
 
 loadMore.addEventListener('click', () => loadPhotos());
-const galleryLoader = new IntersectionObserver((entries) => {
-  if (entries.some((entry) => entry.isIntersecting) && hasMorePhotos) loadPhotos();
-}, {rootMargin: '700px 0px'});
-galleryLoader.observe(loadMore);
-let galleryScrollQueued = false;
-window.addEventListener('scroll', () => {
-  if (galleryScrollQueued) return;
-  galleryScrollQueued = true;
+function updateGalleryAutoPage(isIntersecting) {
+  galleryAutoPageGate.update(
+    isIntersecting,
+    hasMorePhotos && !loadingPhotos && !loadMore.hidden,
+    () => loadPhotos(),
+  );
+}
+
+function galleryLoadMoreIsNearViewport() {
+  const bounds = loadMore.getBoundingClientRect();
+  return bounds.top <= window.innerHeight + 64 && bounds.bottom >= 0;
+}
+
+let galleryViewportCheckQueued = false;
+function queueGalleryViewportCheck() {
+  if (galleryViewportCheckQueued) return;
+  galleryViewportCheckQueued = true;
   requestAnimationFrame(() => {
-    galleryScrollQueued = false;
-    if (!hasMorePhotos || loadingPhotos || loadMore.hidden) return;
-    if (loadMore.getBoundingClientRect().top < window.innerHeight + 1000) loadPhotos();
+    galleryViewportCheckQueued = false;
+    updateGalleryAutoPage(galleryLoadMoreIsNearViewport());
   });
+}
+
+function grantGalleryAutoPageIntent() {
+  galleryAutoPageGate.grantIntent();
+  queueGalleryViewportCheck();
+}
+
+const galleryUsesIntersectionObserver = typeof window.IntersectionObserver === 'function';
+if (galleryUsesIntersectionObserver) {
+  const galleryLoader = new window.IntersectionObserver((entries) => {
+    updateGalleryAutoPage(entries.some((entry) => entry.isIntersecting));
+  }, {rootMargin: '0px 0px 64px 0px'});
+  galleryLoader.observe(loadMore);
+}
+
+// One passive scroll path drives the arithmetic row window. Paging remains
+// observer-driven; only legacy browsers reuse this frame for the sentinel
+// fallback, and neither path invents user intent.
+window.addEventListener('scroll', () => {
+  queueGalleryWindowRender();
+  if (!galleryUsesIntersectionObserver && galleryAutoPageGate.hasIntent()) {
+    queueGalleryViewportCheck();
+  }
 }, {passive: true});
+
+const galleryResizeFrame = galleryWindowApi.createFrameScheduler(() => {
+  const previousWidth = galleryMeasuredWidth;
+  const previousViewportHeight = galleryMeasuredViewportHeight;
+  measureGalleryWindow();
+  const position = captureGalleryPosition();
+  if (
+    Math.abs(galleryMeasuredWidth - previousWidth) > 0.5
+    || Math.abs(galleryMeasuredViewportHeight - previousViewportHeight) > 0.5
+  ) {
+    galleryWindowManager.setModel(galleryWindowModel());
+    restoreGalleryPositionNow(position);
+  } else {
+    renderGalleryWindowNow();
+  }
+});
+window.addEventListener('resize', () => galleryResizeFrame.request(), {passive: true});
+
+let galleryWheelGestureActive = false;
+let galleryWheelGestureTimer = null;
+window.addEventListener('wheel', (event) => {
+  if (!event.target.closest?.('.gallery-shell') || viewer.open) return;
+  if (!galleryWheelGestureActive) {
+    galleryWheelGestureActive = true;
+    grantGalleryAutoPageIntent();
+  }
+  clearTimeout(galleryWheelGestureTimer);
+  galleryWheelGestureTimer = setTimeout(() => { galleryWheelGestureActive = false; }, 240);
+}, {passive: true});
+
+let galleryTouchScroll = null;
+window.addEventListener('touchstart', (event) => {
+  if (
+    event.touches.length !== 1
+    || !event.target.closest?.('.gallery-shell')
+    || viewer.open
+  ) {
+    galleryTouchScroll = null;
+    return;
+  }
+  const touch = event.touches[0];
+  galleryTouchScroll = {id: touch.identifier, y: touch.clientY, granted: false};
+}, {passive: true, capture: true});
+window.addEventListener('touchmove', (event) => {
+  if (!galleryTouchScroll || event.touches.length !== 1 || galleryTouchScroll.granted) return;
+  const touch = event.touches[0];
+  if (touch.identifier !== galleryTouchScroll.id) return;
+  if (Math.abs(touch.clientY - galleryTouchScroll.y) < 8) return;
+  galleryTouchScroll.granted = true;
+  grantGalleryAutoPageIntent();
+}, {passive: true, capture: true});
+window.addEventListener('touchend', () => { galleryTouchScroll = null; }, {passive: true, capture: true});
+window.addEventListener('touchcancel', () => { galleryTouchScroll = null; }, {passive: true, capture: true});
+
+window.addEventListener('keydown', (event) => {
+  if (
+    event.defaultPrevented || event.repeat || event.altKey || event.ctrlKey || event.metaKey
+    || !['ArrowDown', 'PageDown', 'End', ' '].includes(event.key)
+    || event.target.closest?.('input, textarea, select, button, [contenteditable="true"]')
+    || viewer.open
+  ) return;
+  grantGalleryAutoPageIntent();
+});
 document.querySelector('#closeViewer').addEventListener('click', () => viewer.close());
 document.querySelector('#previousPhoto').addEventListener('click', () => movePhoto(-1));
 document.querySelector('#nextPhoto').addEventListener('click', () => movePhoto(1));
 viewer.addEventListener('click', (event) => { if (event.target === viewer) viewer.close(); });
 viewer.addEventListener('close', () => {
   viewerLoadGeneration += 1;
+  clearTimeout(viewerRenditionTimer);
+  pointerPanId = null;
   currentPhotoIndex = -1;
   viewerStage.classList.remove('loading');
   viewerImage.removeAttribute('src');
   stopViewerVideo({clearPoster: true});
   resetViewerZoom();
   resetViewerTouch();
+  setViewerCaptionExpanded(false);
 });
-viewerStage.addEventListener('touchstart', (event) => {
-  if (!viewerImage.hidden && event.touches.length === 2) {
-    pinchActive = true; pinchDistance = distanceBetween(event.touches); pinchZoom = zoom;
-    event.preventDefault(); return;
+viewerZoomOut.addEventListener('click', () => setViewerZoom(zoom - .5, true));
+viewerZoomIn.addEventListener('click', () => setViewerZoom(zoom + .5, true));
+viewerZoomReset.addEventListener('click', () => resetViewerZoom(true));
+viewerStage.addEventListener('wheel', (event) => {
+  if (viewerImage.hidden) return;
+  event.preventDefault();
+  setViewerZoom(zoom + (event.deltaY < 0 ? .25 : -.25));
+}, {passive: false});
+viewerImage.addEventListener('pointerdown', (event) => {
+  if (event.pointerType !== 'mouse' || event.button !== 0 || zoom <= 1.01) return;
+  pointerPanId = event.pointerId;
+  panStartX = event.clientX;
+  panStartY = event.clientY;
+  panOriginX = panX;
+  panOriginY = panY;
+  viewerImage.setPointerCapture(event.pointerId);
+  event.preventDefault();
+});
+viewerImage.addEventListener('pointermove', (event) => {
+  if (pointerPanId !== event.pointerId || zoom <= 1.01) return;
+  panX = panOriginX + event.clientX - panStartX;
+  panY = panOriginY + event.clientY - panStartY;
+  clampViewerPan();
+  applyViewerTransform();
+});
+function endPointerPan(event) {
+  if (pointerPanId !== event.pointerId) return;
+  pointerPanId = null;
+  if (viewerImage.hasPointerCapture(event.pointerId)) viewerImage.releasePointerCapture(event.pointerId);
+}
+viewerImage.addEventListener('pointerup', endPointerPan);
+viewerImage.addEventListener('pointercancel', endPointerPan);
+viewerStage.addEventListener('pointerdown', (event) => {
+  if (event.pointerType !== 'touch') return;
+  viewerTouchPointers.set(event.pointerId, {x: event.clientX, y: event.clientY});
+  viewerStage.setPointerCapture?.(event.pointerId);
+  if (viewerTouchPointers.size === 1) {
+    touchStartX = event.clientX;
+    touchStartY = event.clientY;
+    touchSwipeActive = false;
+    viewerGesturePinched = false;
+  } else if (viewerTouchPointers.size === 2 && !viewerImage.hidden) {
+    const points = [...viewerTouchPointers.values()];
+    pinchActive = true;
+    viewerGesturePinched = true;
+    pinchDistance = pointerDistance(points);
+    viewerPinchCenter = pointerCenter(points);
+    event.preventDefault();
   }
-  if (event.touches.length !== 1) return;
-  const touch = event.touches[0];
-  touchStartX = touch.clientX; touchStartY = touch.clientY;
-  touchSwipeActive = false;
-  if (!viewerImage.hidden) {
-    panStartX = touch.clientX; panStartY = touch.clientY; panOriginX = panX; panOriginY = panY;
-  }
-}, {passive:false, capture:true});
-viewerStage.addEventListener('touchmove', (event) => {
-  if (!viewerImage.hidden && event.touches.length === 2) {
-    zoom = Math.max(1, Math.min(5, pinchZoom * distanceBetween(event.touches) / Math.max(1, pinchDistance)));
-    if (zoom <= 1.01) { panX = 0; panY = 0; }
-    applyViewerTransform(); event.preventDefault(); return;
-  }
-  if (!viewerImage.hidden && event.touches.length === 1 && zoom > 1.01) {
-    const touch = event.touches[0];
-    const maxX = viewerStage.clientWidth * (zoom - 1) / 2;
-    const maxY = viewerStage.clientHeight * (zoom - 1) / 2;
-    panX = Math.max(-maxX, Math.min(maxX, panOriginX + touch.clientX - panStartX));
-    panY = Math.max(-maxY, Math.min(maxY, panOriginY + touch.clientY - panStartY));
-    applyViewerTransform(); event.preventDefault();
+}, {capture: true});
+
+viewerStage.addEventListener('pointermove', (event) => {
+  const previous = viewerTouchPointers.get(event.pointerId);
+  if (!previous) return;
+  viewerTouchPointers.set(event.pointerId, {x: event.clientX, y: event.clientY});
+  if (!viewerImage.hidden && viewerTouchPointers.size === 2) {
+    const points = [...viewerTouchPointers.values()];
+    const center = pointerCenter(points);
+    const distance = pointerDistance(points);
+    if (viewerPinchCenter) {
+      panX += center.x - viewerPinchCenter.x;
+      panY += center.y - viewerPinchCenter.y;
+    }
+    setViewerZoom(zoom * distance / Math.max(1, pinchDistance || distance), false, center);
+    pinchDistance = distance;
+    viewerPinchCenter = center;
+    pinchActive = true;
+    viewerGesturePinched = true;
+    event.preventDefault();
     return;
   }
-  if (event.touches.length === 1 && touchStartX !== null) {
-    const touch = event.touches[0];
-    const dx = touch.clientX - touchStartX;
-    const dy = touch.clientY - touchStartY;
+  if (!viewerImage.hidden && viewerTouchPointers.size === 1 && zoom > 1.01) {
+    panX += event.clientX - previous.x;
+    panY += event.clientY - previous.y;
+    clampViewerPan();
+    applyViewerTransform();
+    event.preventDefault();
+    return;
+  }
+  if (viewerTouchPointers.size === 1 && zoom <= 1.01 && touchStartX !== null) {
+    const dx = event.clientX - touchStartX;
+    const dy = event.clientY - touchStartY;
     if (Math.abs(dx) > 12 && Math.abs(dx) > Math.abs(dy) * 1.2) {
       touchSwipeActive = true;
       event.preventDefault();
     }
   }
-}, {passive:false, capture:true});
-viewerStage.addEventListener('touchend', (event) => {
-  if (event.touches.length) return;
-  if (zoom <= 1.01 && !pinchActive && touchStartX !== null) {
-    const touch = event.changedTouches[0], dx = touch.clientX - touchStartX, dy = touch.clientY - touchStartY;
+}, {passive: false, capture: true});
+
+function finishViewerTouchPointer(event, cancelled = false) {
+  if (!viewerTouchPointers.has(event.pointerId)) return;
+  const wasPinched = viewerGesturePinched;
+  viewerTouchPointers.delete(event.pointerId);
+  if (viewerStage.hasPointerCapture?.(event.pointerId)) viewerStage.releasePointerCapture(event.pointerId);
+  if (viewerTouchPointers.size === 1) {
+    pinchActive = false;
+    pinchDistance = 0;
+    viewerPinchCenter = null;
+    return;
+  }
+  if (viewerTouchPointers.size) return;
+  if (!cancelled && !wasPinched && zoom <= 1.01 && touchStartX !== null) {
+    const dx = event.clientX - touchStartX;
+    const dy = event.clientY - touchStartY;
     if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) * 1.25) {
       event.preventDefault();
       event.stopPropagation();
       movePhoto(dx > 0 ? -1 : 1);
+    } else if (!viewerImage.hidden && !touchSwipeActive && Math.hypot(dx, dy) < 12) {
+      const now = Date.now();
+      if (now - lastViewerTapAt < 320) {
+        event.preventDefault();
+        if (zoom > 1.01) resetViewerZoom(true);
+        else setViewerZoom(2.5, true, {x: event.clientX, y: event.clientY});
+        lastViewerTapAt = 0;
+      } else {
+        lastViewerTapAt = now;
+      }
     }
   }
   if (zoom <= 1.01) resetViewerZoom(true);
   resetViewerTouch();
-}, {passive:false, capture:true});
-viewerStage.addEventListener('touchcancel', resetViewerTouch, {capture:true});
+}
+
+viewerStage.addEventListener('pointerup', (event) => finishViewerTouchPointer(event), {capture: true});
+viewerStage.addEventListener('pointercancel', (event) => finishViewerTouchPointer(event, true), {capture: true});
+window.addEventListener('resize', () => {
+  clampViewerPan();
+  applyViewerTransform();
+}, {passive: true});
 viewerImage.addEventListener('dblclick', () => {
   if (zoom > 1.01) resetViewerZoom(true);
-  else { zoom = 2.5; panX = 0; panY = 0; applyViewerTransform(true); }
+  else setViewerZoom(2.5, true);
 });
 document.addEventListener('keydown', (event) => {
   if (!viewer.open) return;
+  if (event.target.closest('input, textarea, select, button, a')) return;
   if (event.key === 'ArrowLeft') movePhoto(-1);
   if (event.key === 'ArrowRight') movePhoto(1);
+  if (event.key === '+' || event.key === '=') setViewerZoom(zoom + .5, true);
+  if (event.key === '-') setViewerZoom(zoom - .5, true);
+  if (event.key === '0' || event.key.toLowerCase() === 'f') resetViewerZoom(true);
 });
 
 if (new URLSearchParams(location.search).has('upload')) openUpload();
-Promise.all([loadCollections(), loadPhotos(), loadTimeline()]).catch(() => {
+function showGalleryLoadError(mode = 'initial') {
+  galleryRetryMode = mode;
+  galleryStatus.textContent = 'The gallery could not load.';
+  if (loadedPhotos.length) {
+    galleryErrorTitle.textContent = mode === 'page'
+      ? 'More media could not load.'
+      : 'Some library controls could not load.';
+    galleryErrorCopy.textContent = 'Everything already on screen is still available. Retry when the connection is ready.';
+    galleryPageError.hidden = false;
+    loadMore.hidden = true;
+    return;
+  }
   emptyState.hidden = false;
+  emptyState.querySelector('h2').textContent = 'Media is unavailable right now.';
   emptyState.querySelector('p').textContent = 'The gallery could not load. Please try again in a moment.';
+  emptyState.querySelector('[data-upload]').hidden = true;
+  emptyBrowseAll.hidden = true;
+  retryGallery.hidden = false;
+  galleryResultCount.textContent = 'Unavailable';
+}
+
+async function loadInitialGallery() {
+  retryGallery.hidden = true;
+  galleryPageError.hidden = true;
+  emptyState.hidden = true;
+  galleryStatus.textContent = 'Loading media…';
+  try {
+    const requestedCollection = activeCollection;
+    const collectionsRequest = loadCollections().then(() => true).catch(() => false);
+    let photosLoaded = await refreshPhotos();
+    const collectionsLoaded = await collectionsRequest;
+    queueGalleryOriginResync();
+    // Collection deep links historically recovered to All media when a
+    // collection was removed or no longer visible. Keep that behavior even
+    // though the initial photo and collection requests now start together.
+    if (collectionsLoaded && requestedCollection && activeCollection !== requestedCollection) {
+      photosLoaded = await refreshPhotos();
+    }
+    if (!photosLoaded) return;
+    if (!collectionsLoaded) {
+      showToast('Collections could not load. Your photos remain available.');
+    }
+  } catch {
+    showGalleryLoadError();
+  }
+}
+
+retryGallery.addEventListener('click', loadInitialGallery);
+retryGalleryPage.addEventListener('click', async () => {
+  galleryPageError.hidden = true;
+  if (galleryRetryMode === 'page' && loadedPhotos.length) await loadPhotos();
+  else await loadInitialGallery();
 });
+emptyBrowseAll.addEventListener('click', async () => {
+  if (favoriteOnly) {
+    favoriteOnly = false;
+    syncDiscoveryControls();
+    await refreshDiscovery();
+  } else if (activePeriod) await setTimelinePeriod('');
+  else await selectCollection('');
+});
+loadInitialGallery().finally(() => slideshowJobController?.resume());

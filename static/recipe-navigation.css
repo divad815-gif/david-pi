@@ -1,0 +1,11 @@
+.recipe-tabs { display:grid; grid-template-columns:1fr 1.4fr; gap:6px; padding:6px; margin:0 0 20px; border:1px solid var(--line); border-radius:20px; background:var(--surface); }
+.recipe-tabs a { display:flex; justify-content:center; align-items:center; flex-wrap:wrap; gap:6px; min-height:52px; padding:8px; border-radius:14px; text-align:center; text-decoration:none; font-weight:800; color:var(--ink); }
+.recipe-tabs a[aria-current=page] { background:var(--peach); color:var(--night-accent-ink,#302117); }
+.new-badge { font-size:10px; text-transform:uppercase; padding:3px 6px; border:1px solid currentColor; border-radius:20px; }
+.recipe-week-tools { margin-bottom:20px; }
+.recipe-week-tools p { color:var(--muted); margin:6px 0; }
+.recipe-week-tools button { min-height:44px; border:1px solid var(--line); border-radius:12px; padding:10px; color:var(--ink); background:var(--surface); }
+.recipe-card-container { display:flex; flex-direction:column; min-width:0; border:1px solid var(--line); border-radius:20px; overflow:hidden; background:var(--surface); }
+.recipe-card-container .recipe-card { flex:1; width:100%; border:0; border-radius:0; box-shadow:none; }
+.recipe-week-add { margin:10px; padding:10px; min-height:44px; border-radius:12px; border:1px solid var(--line); background:var(--peach); color:var(--night-accent-ink,#302117); font-weight:700; }
+.recipe-week-add:disabled { background:var(--surface); color:var(--muted); }

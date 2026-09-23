@@ -41,7 +41,7 @@ object BackupPreferences {
     private const val RATE_MIB = "rate_mib"
 
     fun load(context: Context): BackupSettings {
-        val values = context.getSharedPreferences(FILE, Context.MODE_PRIVATE)
+        val values = context.getSharedPreferences(com.davidpi.backup.security.HouseholdStorage.preferencesName(context, FILE), Context.MODE_PRIVATE)
         return BackupSettings(
             frequency = BackupFrequency.fromStored(values.getString(FREQUENCY, null)),
             wifiOnly = values.getBoolean(WIFI_ONLY, true),
@@ -53,7 +53,7 @@ object BackupPreferences {
     }
 
     fun save(context: Context, settings: BackupSettings) {
-        context.getSharedPreferences(FILE, Context.MODE_PRIVATE).edit()
+        context.getSharedPreferences(com.davidpi.backup.security.HouseholdStorage.preferencesName(context, FILE), Context.MODE_PRIVATE).edit()
             .putString(FREQUENCY, settings.frequency.storedValue)
             .putBoolean(WIFI_ONLY, settings.wifiOnly)
             .putBoolean(CHARGING_ONLY, settings.chargingOnly)

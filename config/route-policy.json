@@ -1,0 +1,2045 @@
+{
+  "schema_version": 2,
+  "enforcement": {
+    "status": "foundation_only",
+    "content_admin_override": false,
+    "notice": "This inventory is not route enforcement until each domain completes its reviewed transaction-bound integration."
+  },
+  "default_access": "portal",
+  "safe_methods": [
+    "GET",
+    "HEAD",
+    "OPTIONS"
+  ],
+  "principals": {
+    "missing": {
+      "kind": "human",
+      "login": null,
+      "role": null
+    },
+    "unknown": {
+      "kind": "human",
+      "login": "unknown@example.invalid",
+      "role": null
+    },
+    "david": {
+      "kind": "human",
+      "login": "david@example.test",
+      "role": "admin"
+    },
+    "diana": {
+      "kind": "human",
+      "login": "diana@example.test",
+      "role": "household"
+    },
+    "device": {
+      "kind": "bearer",
+      "login": null,
+      "role": "device"
+    }
+  },
+  "access_classes": {
+    "public": {
+      "allowed_principals": [
+        "missing",
+        "unknown",
+        "david",
+        "diana",
+        "device"
+      ]
+    },
+    "portal": {
+      "allowed_principals": [
+        "david",
+        "diana"
+      ]
+    },
+    "admin": {
+      "allowed_principals": [
+        "david"
+      ]
+    },
+    "device_bearer": {
+      "allowed_principals": [
+        "device"
+      ]
+    }
+  },
+  "public_routes": [
+    {
+      "methods": [
+        "GET"
+      ],
+      "route": "/health"
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "route": "/ready"
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "route": "/manifest.webmanifest"
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "route": "/sw.js"
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "route": "/static/<path:filename>"
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "route": "/david-pi-icon-<int:size>.png"
+    }
+  ],
+  "device_bearer_routes": [
+    {
+      "methods": [
+        "POST"
+      ],
+      "route": "/api/v1/device-backup/uploads"
+    },
+    {
+      "methods": [
+        "HEAD",
+        "PATCH",
+        "DELETE"
+      ],
+      "route": "/api/v1/device-backup/uploads/<upload_id>"
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "route": "/api/v1/device-backup/uploads/<upload_id>/complete"
+    },
+    {
+      "methods": [
+        "GET",
+        "HEAD"
+      ],
+      "route": "/api/v1/device-backup/status"
+    },
+    {
+      "methods": [
+        "GET",
+        "HEAD"
+      ],
+      "route": "/api/v1/ios-backup/status"
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "route": "/api/v1/ios-backup/upload"
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "route": "/api/v1/ios-backup/upload-file"
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "route": "/api/v1/ios-backup/checkpoint"
+    },
+    {
+      "methods": [
+        "GET",
+        "HEAD"
+      ],
+      "route": "/api/v1/device-backup/manifest"
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "route": "/api/v1/device-backup/reconcile"
+    }
+  ],
+  "admin_routes": [
+    {
+      "methods": [
+        "POST"
+      ],
+      "route": "/api/system/shutdown"
+    },
+    {
+      "methods": [
+        "POST"
+      ],
+      "route": "/api/admin/operations/<operation>"
+    }
+  ],
+  "media_read_routes": [
+    {
+      "methods": [
+        "GET"
+      ],
+      "route": "/photos",
+      "access": "portal",
+      "authorization": "household_or_owner_when_private"
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "route": "/photos/collections",
+      "access": "portal",
+      "authorization": "household"
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "route": "/api/photos",
+      "access": "portal",
+      "authorization": "household_or_owner_when_private"
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "route": "/api/photos/timeline",
+      "access": "portal",
+      "authorization": "household_or_owner_when_private"
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "route": "/api/photos/deleted",
+      "access": "portal",
+      "authorization": "household_or_owner_when_private"
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "route": "/api/photos/<photo_id>/collections",
+      "access": "portal",
+      "authorization": "household_or_owner_when_private"
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "route": "/api/collections",
+      "access": "portal",
+      "authorization": "household_or_owner_when_private"
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "route": "/api/slideshows/options",
+      "access": "portal",
+      "authorization": "household_or_owner_when_private"
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "route": "/api/slideshows/music/<track_id>",
+      "access": "portal",
+      "authorization": "household"
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "route": "/api/slideshows/<job_id>",
+      "access": "portal",
+      "authorization": "household_or_owner_when_private"
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "route": "/media/thumb/<photo_id>",
+      "access": "portal",
+      "authorization": "household_or_owner_when_private"
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "route": "/media/preview/<photo_id>",
+      "access": "portal",
+      "authorization": "household_or_owner_when_private"
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "route": "/media/detail/<photo_id>",
+      "access": "portal",
+      "authorization": "household_or_owner_when_private"
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "route": "/media/view/<photo_id>",
+      "access": "portal",
+      "authorization": "household_or_owner_when_private"
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "route": "/media/full/<photo_id>",
+      "access": "portal",
+      "authorization": "household_or_owner_when_private"
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "route": "/media/original/<photo_id>",
+      "access": "portal",
+      "authorization": "household_or_owner_when_private"
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "route": "/media/play/<photo_id>",
+      "access": "portal",
+      "authorization": "household_or_owner_when_private"
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "route": "/media/deleted/<kind>/<photo_id>",
+      "access": "portal",
+      "authorization": "household_or_owner_when_private"
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "route": "/mytube",
+      "access": "portal",
+      "authorization": "household"
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "route": "/mytube/watch/<video_id>",
+      "access": "portal",
+      "authorization": "household_or_owner_when_private"
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "route": "/api/mytube/videos",
+      "access": "portal",
+      "authorization": "household_or_owner_when_private"
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "route": "/api/mytube/uploads/<upload_id>",
+      "access": "portal",
+      "authorization": "owner_only"
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "route": "/api/files/uploads/<batch_id>",
+      "access": "portal",
+      "authorization": "owner_only"
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "route": "/api/files/uploads",
+      "access": "portal",
+      "authorization": "owner_only"
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "route": "/api/mytube/collections",
+      "access": "portal",
+      "authorization": "household_or_owner_when_private"
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "route": "/api/mytube/videos/<video_id>",
+      "access": "portal",
+      "authorization": "household_or_owner_when_private"
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "route": "/api/mytube/videos/<video_id>/stream",
+      "access": "portal",
+      "authorization": "household_or_owner_when_private"
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "route": "/api/mytube/videos/<video_id>/hls/<name>",
+      "access": "portal",
+      "authorization": "household_or_owner_when_private"
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "route": "/api/mytube/videos/<video_id>/poster",
+      "access": "portal",
+      "authorization": "household_or_owner_when_private"
+    },
+    {
+      "methods": [
+        "GET"
+      ],
+      "route": "/api/mytube/media-links/<media_id>",
+      "access": "portal",
+      "authorization": "household_or_owner_when_private"
+    }
+  ],
+  "mutations": [
+    {
+      "id": "system.shutdown",
+      "methods": [
+        "POST"
+      ],
+      "route": "/api/system/shutdown",
+      "access": "admin",
+      "effect": "system",
+      "resource": "system_power",
+      "authorization": "system_admin",
+      "csrf": "required",
+      "audit": "security_event",
+      "legacy_handling": "not_applicable"
+    },
+    {
+      "id": "media.visibility.update",
+      "methods": [
+        "PATCH"
+      ],
+      "route": "/api/photos/visibility",
+      "access": "portal",
+      "effect": "update",
+      "resource": "media",
+      "authorization": "owner_only",
+      "csrf": "required",
+      "audit": "mutation_event",
+      "legacy_handling": "deny_write_until_owned"
+    },
+    {
+      "id": "media.favorite.update",
+      "methods": [
+        "PUT"
+      ],
+      "route": "/api/photos/<photo_id>/favorite",
+      "access": "portal",
+      "effect": "update",
+      "resource": "media_personal_state",
+      "authorization": "personal_state",
+      "csrf": "required",
+      "audit": "mutation_event",
+      "legacy_handling": "preserve_personal_state"
+    },
+    {
+      "id": "media.caption.update",
+      "methods": [
+        "PUT"
+      ],
+      "route": "/api/photos/<photo_id>/caption",
+      "access": "portal",
+      "effect": "update",
+      "resource": "media",
+      "authorization": "owner_only",
+      "csrf": "required",
+      "audit": "mutation_event",
+      "legacy_handling": "deny_write_until_owned"
+    },
+    {
+      "id": "media.trash.bulk",
+      "methods": [
+        "POST"
+      ],
+      "route": "/api/photos/trash",
+      "access": "portal",
+      "effect": "destructive",
+      "resource": "media",
+      "authorization": "owner_only",
+      "csrf": "required",
+      "audit": "mutation_event",
+      "legacy_handling": "owner_migration_required",
+      "retention": {
+        "mode": "soft_delete",
+        "implementation": "domain_pending",
+        "minimum_days": 30,
+        "confirmation": "none",
+        "backup_gate": "required_before_permanent_delete",
+        "restore_route_id": "media.restore.bulk"
+      }
+    },
+    {
+      "id": "media.restore.bulk",
+      "methods": [
+        "POST"
+      ],
+      "route": "/api/photos/restore",
+      "access": "portal",
+      "effect": "restore",
+      "resource": "media",
+      "authorization": "owner_only",
+      "csrf": "required",
+      "audit": "mutation_event",
+      "legacy_handling": "owner_migration_required",
+      "retention": {
+        "mode": "soft_delete",
+        "implementation": "domain_pending",
+        "minimum_days": 30,
+        "confirmation": "none",
+        "backup_gate": "required_before_permanent_delete"
+      }
+    },
+    {
+      "id": "media.restore_all",
+      "methods": [
+        "POST"
+      ],
+      "route": "/api/photos/restore-all",
+      "access": "portal",
+      "effect": "restore",
+      "resource": "media",
+      "authorization": "owner_only",
+      "csrf": "required",
+      "audit": "mutation_event",
+      "legacy_handling": "owner_migration_required",
+      "retention": {
+        "mode": "soft_delete",
+        "implementation": "domain_pending",
+        "minimum_days": 30,
+        "confirmation": "none",
+        "backup_gate": "required_before_permanent_delete"
+      }
+    },
+    {
+      "id": "media.purge.bulk",
+      "methods": [
+        "POST"
+      ],
+      "route": "/api/photos/purge",
+      "access": "portal",
+      "effect": "destructive",
+      "resource": "media",
+      "authorization": "owner_only",
+      "csrf": "required",
+      "audit": "mutation_event",
+      "legacy_handling": "owner_migration_required",
+      "retention": {
+        "mode": "permanent_delete",
+        "implementation": "domain_pending",
+        "minimum_days": 30,
+        "confirmation": "required",
+        "backup_gate": "required_before_permanent_delete"
+      }
+    },
+    {
+      "id": "media.purge_all",
+      "methods": [
+        "POST"
+      ],
+      "route": "/api/photos/purge-all",
+      "access": "portal",
+      "effect": "destructive",
+      "resource": "media",
+      "authorization": "owner_only",
+      "csrf": "required",
+      "audit": "mutation_event",
+      "legacy_handling": "owner_migration_required",
+      "retention": {
+        "mode": "permanent_delete",
+        "implementation": "domain_pending",
+        "minimum_days": 30,
+        "confirmation": "required",
+        "backup_gate": "required_before_permanent_delete"
+      }
+    },
+    {
+      "id": "media.trash.single",
+      "methods": [
+        "DELETE"
+      ],
+      "route": "/api/photos/<photo_id>",
+      "access": "portal",
+      "effect": "destructive",
+      "resource": "media",
+      "authorization": "owner_only",
+      "csrf": "required",
+      "audit": "mutation_event",
+      "legacy_handling": "owner_migration_required",
+      "retention": {
+        "mode": "soft_delete",
+        "implementation": "domain_pending",
+        "minimum_days": 30,
+        "confirmation": "none",
+        "backup_gate": "required_before_permanent_delete",
+        "restore_route_id": "media.restore.bulk"
+      }
+    },
+    {
+      "id": "collection.create",
+      "methods": [
+        "POST"
+      ],
+      "route": "/api/collections",
+      "access": "portal",
+      "effect": "create",
+      "resource": "media_collection",
+      "authorization": "caller_owned",
+      "csrf": "required",
+      "audit": "mutation_event",
+      "legacy_handling": "not_applicable"
+    },
+    {
+      "id": "collection.update",
+      "methods": [
+        "PATCH"
+      ],
+      "route": "/api/collections/<collection_id>",
+      "access": "portal",
+      "effect": "update",
+      "resource": "media_collection",
+      "authorization": "owner_only",
+      "csrf": "required",
+      "audit": "mutation_event",
+      "legacy_handling": "owner_migration_required"
+    },
+    {
+      "id": "collection.delete",
+      "methods": [
+        "DELETE"
+      ],
+      "route": "/api/collections/<collection_id>",
+      "access": "portal",
+      "effect": "destructive",
+      "resource": "media_collection",
+      "authorization": "owner_only",
+      "csrf": "required",
+      "audit": "mutation_event",
+      "legacy_handling": "owner_migration_required",
+      "retention": {
+        "mode": "soft_delete",
+        "implementation": "domain_pending",
+        "minimum_days": 30,
+        "confirmation": "none",
+        "backup_gate": "required_before_permanent_delete"
+      }
+    },
+    {
+      "id": "slideshow.create",
+      "methods": [
+        "POST"
+      ],
+      "route": "/api/slideshows",
+      "access": "portal",
+      "effect": "create",
+      "resource": "media_slideshow",
+      "authorization": "caller_owned_from_visible_sources",
+      "csrf": "required",
+      "audit": "mutation_event",
+      "legacy_handling": "owner_migration_required"
+    },
+    {
+      "id": "collection.membership_state.read",
+      "methods": [
+        "POST"
+      ],
+      "route": "/api/collections/membership-state",
+      "access": "portal",
+      "effect": "read",
+      "resource": "media_collection_membership",
+      "authorization": "visible_read_only",
+      "csrf": "read_only_exempt",
+      "audit": "read_event",
+      "legacy_handling": "owner_migration_required"
+    },
+    {
+      "id": "collection.membership.update",
+      "methods": [
+        "POST"
+      ],
+      "route": "/api/collections/membership",
+      "access": "portal",
+      "effect": "update",
+      "resource": "media_collection_membership",
+      "authorization": "shared_collaboration",
+      "csrf": "required",
+      "audit": "mutation_event",
+      "legacy_handling": "owner_migration_required"
+    },
+    {
+      "id": "collection.photo_membership.put",
+      "methods": [
+        "PUT"
+      ],
+      "route": "/api/collections/<collection_id>/photos/<photo_id>",
+      "access": "portal",
+      "effect": "update",
+      "resource": "media_collection_membership",
+      "authorization": "shared_collaboration",
+      "csrf": "required",
+      "audit": "mutation_event",
+      "legacy_handling": "owner_migration_required"
+    },
+    {
+      "id": "collection.photo_membership.add",
+      "methods": [
+        "POST"
+      ],
+      "route": "/api/collections/<collection_id>/photos",
+      "access": "portal",
+      "effect": "update",
+      "resource": "media_collection_membership",
+      "authorization": "shared_collaboration",
+      "csrf": "required",
+      "audit": "mutation_event",
+      "legacy_handling": "owner_migration_required"
+    },
+    {
+      "id": "collection.photo_membership.remove",
+      "methods": [
+        "DELETE"
+      ],
+      "route": "/api/collections/<collection_id>/photos/<photo_id>",
+      "access": "portal",
+      "effect": "update",
+      "resource": "media_collection_membership",
+      "authorization": "owner_or_contributor",
+      "csrf": "required",
+      "audit": "mutation_event",
+      "legacy_handling": "owner_migration_required"
+    },
+    {
+      "id": "media.upload",
+      "methods": [
+        "POST"
+      ],
+      "route": "/api/upload",
+      "access": "portal",
+      "effect": "upload",
+      "resource": "media",
+      "authorization": "caller_owned",
+      "csrf": "required",
+      "audit": "mutation_event",
+      "legacy_handling": "not_applicable"
+    },
+    {
+      "id": "assistant.conversation.delete",
+      "methods": [
+        "DELETE"
+      ],
+      "route": "/api/assistant/conversations/<conversation_id>",
+      "access": "portal",
+      "effect": "destructive",
+      "resource": "assistant_conversation",
+      "authorization": "household_shared_content",
+      "csrf": "required",
+      "audit": "mutation_event",
+      "legacy_handling": "preserve_shared_legacy_collaboration",
+      "retention": {
+        "mode": "soft_delete",
+        "implementation": "domain_pending",
+        "minimum_days": 30,
+        "confirmation": "none",
+        "backup_gate": "required_before_permanent_delete"
+      }
+    },
+    {
+      "id": "assistant.prompt.create",
+      "methods": [
+        "POST"
+      ],
+      "route": "/api/assistant",
+      "access": "portal",
+      "effect": "create",
+      "resource": "assistant_conversation",
+      "authorization": "household_shared_content",
+      "csrf": "required",
+      "audit": "mutation_event",
+      "legacy_handling": "not_applicable"
+    },
+    {
+      "id": "audiobook.upload",
+      "methods": [
+        "POST"
+      ],
+      "route": "/api/audiobooks/upload",
+      "access": "portal",
+      "effect": "upload",
+      "resource": "audiobook",
+      "authorization": "caller_owned",
+      "csrf": "required",
+      "audit": "mutation_event",
+      "legacy_handling": "not_applicable"
+    },
+    {
+      "id": "audiobook.progress.update",
+      "methods": [
+        "PUT"
+      ],
+      "route": "/api/audiobooks/<book_id>/progress",
+      "access": "portal",
+      "effect": "activity",
+      "resource": "audiobook_progress",
+      "authorization": "personal_state",
+      "csrf": "required",
+      "audit": "activity_event",
+      "legacy_handling": "preserve_personal_state"
+    },
+    {
+      "id": "audiobook.update",
+      "methods": [
+        "PUT"
+      ],
+      "route": "/api/audiobooks/<book_id>",
+      "access": "portal",
+      "effect": "update",
+      "resource": "audiobook",
+      "authorization": "owner_only",
+      "csrf": "required",
+      "audit": "mutation_event",
+      "legacy_handling": "owner_migration_required"
+    },
+    {
+      "id": "audiobook.trash",
+      "methods": [
+        "DELETE"
+      ],
+      "route": "/api/audiobooks/<book_id>",
+      "access": "portal",
+      "effect": "destructive",
+      "resource": "audiobook",
+      "authorization": "owner_only",
+      "csrf": "required",
+      "audit": "mutation_event",
+      "legacy_handling": "owner_migration_required",
+      "retention": {
+        "mode": "soft_delete",
+        "implementation": "domain_pending",
+        "minimum_days": 30,
+        "confirmation": "none",
+        "backup_gate": "required_before_permanent_delete",
+        "restore_route_id": "audiobook.restore"
+      }
+    },
+    {
+      "id": "audiobook.restore",
+      "methods": [
+        "POST"
+      ],
+      "route": "/api/audiobooks/<book_id>/restore",
+      "access": "portal",
+      "effect": "restore",
+      "resource": "audiobook",
+      "authorization": "owner_only",
+      "csrf": "required",
+      "audit": "mutation_event",
+      "legacy_handling": "owner_migration_required",
+      "retention": {
+        "mode": "soft_delete",
+        "implementation": "domain_pending",
+        "minimum_days": 30,
+        "confirmation": "none",
+        "backup_gate": "required_before_permanent_delete"
+      }
+    },
+    {
+      "id": "chat.conversation.create",
+      "methods": [
+        "POST"
+      ],
+      "route": "/api/chat/conversations",
+      "access": "portal",
+      "effect": "create",
+      "resource": "chat_conversation",
+      "authorization": "caller_owned",
+      "csrf": "required",
+      "audit": "mutation_event",
+      "legacy_handling": "not_applicable"
+    },
+    {
+      "id": "chat.conversation.delete",
+      "methods": [
+        "DELETE"
+      ],
+      "route": "/api/chat/conversations/<conversation_id>",
+      "access": "portal",
+      "effect": "destructive",
+      "resource": "chat_conversation",
+      "authorization_by_action": {
+        "leave": "conversation_member_contribution",
+        "delete_for_all": "conversation_creator_with_unanimous_active_member_approval"
+      },
+      "csrf": "required",
+      "audit": "mutation_event",
+      "legacy_handling": "owner_migration_required",
+      "retention": {
+        "mode": "leave_or_soft_delete",
+        "implementation": "domain_pending",
+        "minimum_days": 30,
+        "confirmation": "required",
+        "backup_gate": "required_before_permanent_delete"
+      }
+    },
+    {
+      "id": "chat.message.create",
+      "methods": [
+        "POST"
+      ],
+      "route": "/api/chat/conversations/<conversation_id>/messages",
+      "access": "portal",
+      "effect": "create",
+      "resource": "chat_message",
+      "authorization": "conversation_member_contribution",
+      "csrf": "required",
+      "audit": "mutation_event",
+      "legacy_handling": "owner_migration_required"
+    },
+    {
+      "id": "chat.message.update",
+      "methods": [
+        "PATCH"
+      ],
+      "route": "/api/chat/messages/<int:message_id>",
+      "access": "portal",
+      "effect": "update",
+      "resource": "chat_message",
+      "authorization": "message_sender",
+      "csrf": "required",
+      "audit": "mutation_event",
+      "legacy_handling": "owner_migration_required"
+    },
+    {
+      "id": "chat.message.delete",
+      "methods": [
+        "DELETE"
+      ],
+      "route": "/api/chat/messages/<int:message_id>",
+      "access": "portal",
+      "effect": "destructive",
+      "resource": "chat_message",
+      "authorization": "message_sender",
+      "csrf": "required",
+      "audit": "mutation_event",
+      "legacy_handling": "owner_migration_required",
+      "retention": {
+        "mode": "soft_delete",
+        "implementation": "domain_pending",
+        "minimum_days": 30,
+        "confirmation": "none",
+        "backup_gate": "required_before_permanent_delete"
+      }
+    },
+    {
+      "id": "chat.read_state.update",
+      "methods": [
+        "POST"
+      ],
+      "route": "/api/chat/conversations/<conversation_id>/read",
+      "access": "portal",
+      "effect": "activity",
+      "resource": "chat_read_state",
+      "authorization": "conversation_member_personal_state",
+      "csrf": "required",
+      "audit": "activity_event",
+      "legacy_handling": "preserve_personal_state"
+    },
+    {
+      "id": "chat.attachment.copy_to_media",
+      "methods": [
+        "POST"
+      ],
+      "route": "/api/chat/attachments/<attachment_id>/save-to-media",
+      "access": "portal",
+      "effect": "create",
+      "resource": "media_import_from_chat",
+      "authorization": "caller_owned_from_conversation",
+      "csrf": "required",
+      "audit": "mutation_event",
+      "legacy_handling": "owner_migration_required"
+    },
+    {
+      "id": "chat.push.web.update",
+      "methods": [
+        "POST"
+      ],
+      "route": "/api/chat/push/web",
+      "access": "portal",
+      "effect": "credential",
+      "resource": "push_credential",
+      "authorization": "personal_credential",
+      "csrf": "required",
+      "audit": "security_event",
+      "legacy_handling": "preserve_personal_state"
+    },
+    {
+      "id": "chat.push.android.update",
+      "methods": [
+        "POST"
+      ],
+      "route": "/api/chat/push/android",
+      "access": "portal",
+      "effect": "credential",
+      "resource": "push_credential",
+      "authorization": "personal_credential",
+      "csrf": "required",
+      "audit": "security_event",
+      "legacy_handling": "preserve_personal_state"
+    },
+    {
+      "id": "device.pairing_token.create",
+      "methods": [
+        "POST"
+      ],
+      "route": "/api/device-backup/pairing-token",
+      "access": "portal",
+      "effect": "credential",
+      "resource": "device_credential",
+      "authorization": "caller_owned_credential",
+      "csrf": "required",
+      "audit": "security_event",
+      "legacy_handling": "not_applicable"
+    },
+    {
+      "id": "device.ios_credential_file.create",
+      "methods": [
+        "POST"
+      ],
+      "route": "/api/ios-backup/credential-file",
+      "access": "portal",
+      "effect": "credential",
+      "resource": "device_credential",
+      "authorization": "caller_owned_credential",
+      "csrf": "required",
+      "audit": "security_event",
+      "legacy_handling": "not_applicable"
+    },
+    {
+      "id": "device.ios_shortcut.create",
+      "methods": [
+        "POST"
+      ],
+      "route": "/api/ios-backup/shortcut",
+      "access": "portal",
+      "effect": "credential",
+      "resource": "device_credential",
+      "authorization": "caller_owned_credential",
+      "csrf": "required",
+      "audit": "security_event",
+      "legacy_handling": "not_applicable"
+    },
+    {
+      "id": "device.backup_pair",
+      "methods": [
+        "POST"
+      ],
+      "route": "/api/v1/device-backup/pair",
+      "access": "portal",
+      "effect": "credential",
+      "resource": "device_credential",
+      "authorization": "allowlisted_human_and_one_time_pairing_code",
+      "csrf": "pairing_code_exempt",
+      "audit": "security_event",
+      "legacy_handling": "device_binding_required"
+    },
+    {
+      "id": "device.ios_pair",
+      "methods": [
+        "POST"
+      ],
+      "route": "/api/v1/ios-backup/pair",
+      "access": "portal",
+      "effect": "credential",
+      "resource": "device_credential",
+      "authorization": "allowlisted_human_and_one_time_pairing_code",
+      "csrf": "pairing_code_exempt",
+      "audit": "security_event",
+      "legacy_handling": "device_binding_required"
+    },
+    {
+      "id": "device.upload.create",
+      "methods": [
+        "POST"
+      ],
+      "route": "/api/v1/device-backup/uploads",
+      "access": "device_bearer",
+      "effect": "upload",
+      "resource": "media_device_backup",
+      "authorization": "paired_device_owner",
+      "csrf": "bearer_exempt",
+      "audit": "mutation_event",
+      "legacy_handling": "device_binding_required"
+    },
+    {
+      "id": "device.upload.patch",
+      "methods": [
+        "PATCH"
+      ],
+      "route": "/api/v1/device-backup/uploads/<upload_id>",
+      "access": "device_bearer",
+      "effect": "upload",
+      "resource": "media_device_backup",
+      "authorization": "paired_device_owner",
+      "csrf": "bearer_exempt",
+      "audit": "mutation_event",
+      "legacy_handling": "device_binding_required"
+    },
+    {
+      "id": "device.upload.abandon",
+      "methods": [
+        "DELETE"
+      ],
+      "route": "/api/v1/device-backup/uploads/<upload_id>",
+      "access": "device_bearer",
+      "effect": "update",
+      "resource": "media_device_backup",
+      "authorization": "paired_device_owner",
+      "csrf": "bearer_exempt",
+      "audit": "mutation_event",
+      "legacy_handling": "device_binding_required"
+    },
+    {
+      "id": "device.upload.complete",
+      "methods": [
+        "POST"
+      ],
+      "route": "/api/v1/device-backup/uploads/<upload_id>/complete",
+      "access": "device_bearer",
+      "effect": "create",
+      "resource": "media_device_backup",
+      "authorization": "paired_device_owner",
+      "csrf": "bearer_exempt",
+      "audit": "mutation_event",
+      "legacy_handling": "device_binding_required"
+    },
+    {
+      "id": "device.ios_upload.create",
+      "methods": [
+        "POST"
+      ],
+      "route": "/api/v1/ios-backup/upload",
+      "access": "device_bearer",
+      "effect": "upload",
+      "resource": "media_device_backup",
+      "authorization": "paired_device_owner",
+      "csrf": "bearer_exempt",
+      "audit": "mutation_event",
+      "legacy_handling": "device_binding_required"
+    },
+    {
+      "id": "device.ios_upload_file.create",
+      "methods": [
+        "POST"
+      ],
+      "route": "/api/v1/ios-backup/upload-file",
+      "access": "device_bearer",
+      "effect": "upload",
+      "resource": "media_device_backup",
+      "authorization": "paired_device_owner",
+      "csrf": "bearer_exempt",
+      "audit": "mutation_event",
+      "legacy_handling": "device_binding_required"
+    },
+    {
+      "id": "device.ios_checkpoint.update",
+      "methods": [
+        "POST"
+      ],
+      "route": "/api/v1/ios-backup/checkpoint",
+      "access": "device_bearer",
+      "effect": "activity",
+      "resource": "device_backup",
+      "authorization": "paired_device_owner",
+      "csrf": "bearer_exempt",
+      "audit": "activity_event",
+      "legacy_handling": "device_binding_required"
+    },
+    {
+      "id": "device.reconcile",
+      "methods": [
+        "POST"
+      ],
+      "route": "/api/v1/device-backup/reconcile",
+      "access": "device_bearer",
+      "effect": "update",
+      "resource": "device_backup",
+      "authorization": "paired_device_owner",
+      "csrf": "bearer_exempt",
+      "audit": "mutation_event",
+      "legacy_handling": "device_binding_required"
+    },
+    {
+      "id": "device.revoke",
+      "methods": [
+        "POST"
+      ],
+      "route": "/api/device-backup/devices/<device_id>/revoke",
+      "access": "portal",
+      "effect": "destructive",
+      "resource": "device_credential",
+      "authorization": "device_owner_or_admin",
+      "csrf": "required",
+      "audit": "security_event",
+      "legacy_handling": "device_binding_required",
+      "retention": {
+        "mode": "revocation",
+        "implementation": "enforced",
+        "minimum_days": 0,
+        "confirmation": "required",
+        "backup_gate": "not_applicable"
+      }
+    },
+    {
+      "id": "file.folder.create",
+      "methods": [
+        "POST"
+      ],
+      "route": "/api/files/folders",
+      "access": "portal",
+      "effect": "create",
+      "resource": "file_folder",
+      "authorization": "caller_owned",
+      "csrf": "required",
+      "audit": "mutation_event",
+      "legacy_handling": "not_applicable"
+    },
+    {
+      "id": "file.upload",
+      "methods": [
+        "POST"
+      ],
+      "route": "/api/files/upload",
+      "access": "portal",
+      "effect": "upload",
+      "resource": "file",
+      "authorization": "caller_owned",
+      "csrf": "required",
+      "audit": "mutation_event",
+      "legacy_handling": "not_applicable"
+    },
+    {
+      "id": "file.update",
+      "methods": [
+        "PUT"
+      ],
+      "route": "/api/files/<file_id>",
+      "access": "portal",
+      "effect": "update",
+      "resource": "file",
+      "authorization": "owner_only",
+      "csrf": "required",
+      "audit": "mutation_event",
+      "legacy_handling": "owner_migration_required"
+    },
+    {
+      "id": "file.trash",
+      "methods": [
+        "DELETE"
+      ],
+      "route": "/api/files/<file_id>",
+      "access": "portal",
+      "effect": "destructive",
+      "resource": "file",
+      "authorization": "owner_only",
+      "csrf": "required",
+      "audit": "mutation_event",
+      "legacy_handling": "owner_migration_required",
+      "retention": {
+        "mode": "soft_delete",
+        "implementation": "domain_pending",
+        "minimum_days": 30,
+        "confirmation": "none",
+        "backup_gate": "required_before_permanent_delete",
+        "restore_route_id": "file.restore"
+      }
+    },
+    {
+      "id": "file.restore",
+      "methods": [
+        "POST"
+      ],
+      "route": "/api/files/<file_id>/restore",
+      "access": "portal",
+      "effect": "restore",
+      "resource": "file",
+      "authorization": "owner_only",
+      "csrf": "required",
+      "audit": "mutation_event",
+      "legacy_handling": "owner_migration_required",
+      "retention": {
+        "mode": "soft_delete",
+        "implementation": "domain_pending",
+        "minimum_days": 30,
+        "confirmation": "none",
+        "backup_gate": "required_before_permanent_delete"
+      }
+    },
+    {
+      "id": "file.purge",
+      "methods": [
+        "POST"
+      ],
+      "route": "/api/files/<file_id>/purge",
+      "access": "portal",
+      "effect": "destructive",
+      "resource": "file",
+      "authorization": "owner_only",
+      "csrf": "required",
+      "audit": "mutation_event",
+      "legacy_handling": "owner_migration_required",
+      "retention": {
+        "mode": "permanent_delete",
+        "implementation": "domain_pending",
+        "minimum_days": 30,
+        "confirmation": "required",
+        "backup_gate": "required_before_permanent_delete"
+      }
+    },
+    {
+      "id": "game.score.create",
+      "methods": [
+        "POST"
+      ],
+      "route": "/api/games/scores",
+      "access": "portal",
+      "effect": "create",
+      "resource": "game_score",
+      "authorization": "caller_owned",
+      "csrf": "required",
+      "audit": "mutation_event",
+      "legacy_handling": "not_applicable"
+    },
+    {
+      "id": "movie.create",
+      "methods": [
+        "POST"
+      ],
+      "route": "/api/movies",
+      "access": "portal",
+      "effect": "create",
+      "resource": "movie",
+      "authorization": "caller_owned",
+      "csrf": "required",
+      "audit": "mutation_event",
+      "legacy_handling": "not_applicable"
+    },
+    {
+      "id": "movie.delete",
+      "methods": [
+        "DELETE"
+      ],
+      "route": "/api/movies/<movie_id>",
+      "access": "portal",
+      "effect": "destructive",
+      "resource": "movie",
+      "authorization": "owner_or_contributor_or_legacy_shared",
+      "csrf": "required",
+      "audit": "mutation_event",
+      "legacy_handling": "preserve_shared_legacy_collaboration",
+      "retention": {
+        "mode": "soft_delete",
+        "implementation": "domain_pending",
+        "minimum_days": 30,
+        "confirmation": "none",
+        "backup_gate": "required_before_permanent_delete",
+        "restore_route_id": "movie.restore"
+      }
+    },
+    {
+      "id": "movie.restore",
+      "methods": [
+        "POST"
+      ],
+      "route": "/api/movies/<movie_id>/restore",
+      "access": "portal",
+      "effect": "restore",
+      "resource": "movie",
+      "authorization": "owner_or_contributor_or_legacy_shared",
+      "csrf": "required",
+      "audit": "mutation_event",
+      "legacy_handling": "preserve_shared_legacy_collaboration",
+      "retention": {
+        "mode": "soft_delete",
+        "implementation": "domain_pending",
+        "minimum_days": 30,
+        "confirmation": "none",
+        "backup_gate": "required_before_permanent_delete"
+      }
+    },
+    {
+      "id": "movie.watched_state.update",
+      "methods": [
+        "POST"
+      ],
+      "route": "/api/movies/<movie_id>/watched",
+      "access": "portal",
+      "effect": "update",
+      "resource": "movie_watched_state",
+      "authorization": "personal_state",
+      "csrf": "required",
+      "audit": "mutation_event",
+      "legacy_handling": "preserve_personal_state"
+    },
+    {
+      "id": "movie.availability.refresh",
+      "methods": [
+        "POST"
+      ],
+      "route": "/api/movies/check",
+      "access": "portal",
+      "effect": "update",
+      "resource": "movie_availability",
+      "authorization": "household_service_action",
+      "csrf": "required",
+      "audit": "mutation_event",
+      "legacy_handling": "not_applicable"
+    },
+    {
+      "id": "movie.subscription.update",
+      "methods": [
+        "PUT"
+      ],
+      "route": "/api/movies/subscriptions",
+      "access": "portal",
+      "effect": "update",
+      "resource": "movie_subscription",
+      "authorization": "personal_state",
+      "csrf": "required",
+      "audit": "mutation_event",
+      "legacy_handling": "preserve_personal_state"
+    },
+    {
+      "id": "note.create",
+      "methods": [
+        "POST"
+      ],
+      "route": "/api/notes",
+      "access": "portal",
+      "effect": "create",
+      "resource": "note",
+      "authorization": "caller_owned",
+      "csrf": "required",
+      "audit": "mutation_event",
+      "legacy_handling": "not_applicable"
+    },
+    {
+      "id": "note.update",
+      "methods": [
+        "PUT"
+      ],
+      "route": "/api/notes/<note_id>",
+      "access": "portal",
+      "effect": "update",
+      "resource": "note",
+      "authorization": "owner_only",
+      "csrf": "required",
+      "audit": "mutation_event",
+      "legacy_handling": "owner_migration_required"
+    },
+    {
+      "id": "note.state.update",
+      "methods": [
+        "POST"
+      ],
+      "route": "/api/notes/<note_id>/state",
+      "access": "portal",
+      "effect": "update",
+      "resource": "note",
+      "authorization_by_action": {
+        "pin": "owner_only",
+        "unpin": "owner_only",
+        "archive": "owner_only",
+        "unarchive": "owner_only",
+        "trash": "owner_only",
+        "restore": "owner_only"
+      },
+      "csrf": "required",
+      "audit": "mutation_event",
+      "legacy_handling": "owner_migration_required",
+      "retention": {
+        "mode": "soft_delete",
+        "implementation": "domain_pending",
+        "minimum_days": 30,
+        "confirmation": "none",
+        "backup_gate": "required_before_permanent_delete"
+      }
+    },
+    {
+      "id": "note.purge",
+      "methods": [
+        "DELETE"
+      ],
+      "route": "/api/notes/<note_id>",
+      "access": "portal",
+      "effect": "destructive",
+      "resource": "note",
+      "authorization": "owner_only",
+      "csrf": "required",
+      "audit": "mutation_event",
+      "legacy_handling": "owner_migration_required",
+      "retention": {
+        "mode": "permanent_delete",
+        "implementation": "domain_pending",
+        "minimum_days": 30,
+        "confirmation": "required",
+        "backup_gate": "required_before_permanent_delete"
+      }
+    },
+    {
+      "id": "place.restaurant.create",
+      "methods": [
+        "POST"
+      ],
+      "route": "/api/places/restaurants",
+      "access": "portal",
+      "effect": "create",
+      "resource": "place_restaurant",
+      "authorization": "household_shared_content",
+      "csrf": "required",
+      "audit": "mutation_event",
+      "legacy_handling": "not_applicable"
+    },
+    {
+      "id": "place.restaurant.update",
+      "methods": [
+        "PUT"
+      ],
+      "route": "/api/places/restaurants/<restaurant_id>",
+      "access": "portal",
+      "effect": "update",
+      "resource": "place_restaurant",
+      "authorization": "household_shared_content",
+      "csrf": "required",
+      "audit": "mutation_event",
+      "legacy_handling": "preserve_shared_legacy_collaboration"
+    },
+    {
+      "id": "place.review.update",
+      "methods": [
+        "POST"
+      ],
+      "route": "/api/places/restaurants/<restaurant_id>/review",
+      "access": "portal",
+      "effect": "update",
+      "resource": "place_review",
+      "authorization": "household_shared_content",
+      "csrf": "required",
+      "audit": "mutation_event",
+      "legacy_handling": "preserve_shared_legacy_collaboration"
+    },
+    {
+      "id": "place.restaurant.delete",
+      "methods": [
+        "DELETE"
+      ],
+      "route": "/api/places/restaurants/<restaurant_id>",
+      "access": "portal",
+      "effect": "destructive",
+      "resource": "place_restaurant",
+      "authorization": "household_shared_content",
+      "csrf": "required",
+      "audit": "mutation_event",
+      "legacy_handling": "preserve_shared_legacy_collaboration",
+      "retention": {
+        "mode": "soft_delete",
+        "implementation": "domain_pending",
+        "minimum_days": 30,
+        "confirmation": "none",
+        "backup_gate": "required_before_permanent_delete",
+        "restore_route_id": "place.restaurant.restore"
+      }
+    },
+    {
+      "id": "place.restaurant.restore",
+      "methods": [
+        "POST"
+      ],
+      "route": "/api/places/restaurants/<restaurant_id>/restore",
+      "access": "portal",
+      "effect": "restore",
+      "resource": "place_restaurant",
+      "authorization": "household_shared_content",
+      "csrf": "required",
+      "audit": "mutation_event",
+      "legacy_handling": "preserve_shared_legacy_collaboration",
+      "retention": {
+        "mode": "soft_delete",
+        "implementation": "domain_pending",
+        "minimum_days": 30,
+        "confirmation": "none",
+        "backup_gate": "required_before_permanent_delete"
+      }
+    },
+    {
+      "id": "place.choice.create",
+      "methods": [
+        "POST"
+      ],
+      "route": "/api/places/choose",
+      "access": "portal",
+      "effect": "activity",
+      "resource": "place_choice",
+      "authorization": "household_service_action",
+      "csrf": "required",
+      "audit": "activity_event",
+      "legacy_handling": "not_applicable"
+    },
+    {
+      "id": "place.margarita.update",
+      "methods": [
+        "PUT"
+      ],
+      "route": "/api/places/margaritas/<int:month>",
+      "access": "portal",
+      "effect": "update",
+      "resource": "place_margarita_record",
+      "authorization": "household_shared_content",
+      "csrf": "required",
+      "audit": "mutation_event",
+      "legacy_handling": "preserve_shared_legacy_collaboration"
+    },
+    {
+      "id": "place.margarita.assign_year",
+      "methods": [
+        "POST"
+      ],
+      "route": "/api/places/margaritas/assign-year",
+      "access": "portal",
+      "effect": "create",
+      "resource": "place_margarita_record",
+      "authorization": "household_shared_content",
+      "csrf": "required",
+      "audit": "mutation_event",
+      "legacy_handling": "preserve_shared_legacy_collaboration"
+    },
+    {
+      "id": "recipe.mealdb_import",
+      "methods": [
+        "POST"
+      ],
+      "route": "/api/recipes/import-mealdb",
+      "access": "portal",
+      "effect": "create",
+      "resource": "recipe",
+      "authorization": "caller_owned",
+      "csrf": "required",
+      "audit": "mutation_event",
+      "legacy_handling": "not_applicable"
+    },
+    {
+      "id": "recipe.create",
+      "methods": [
+        "POST"
+      ],
+      "route": "/api/recipes",
+      "access": "portal",
+      "effect": "create",
+      "resource": "recipe",
+      "authorization": "caller_owned",
+      "csrf": "required",
+      "audit": "mutation_event",
+      "legacy_handling": "not_applicable"
+    },
+    {
+      "id": "recipe.url_import",
+      "methods": [
+        "POST"
+      ],
+      "route": "/api/recipes/import",
+      "access": "portal",
+      "effect": "create",
+      "resource": "recipe",
+      "authorization": "caller_owned",
+      "csrf": "required",
+      "audit": "mutation_event",
+      "legacy_handling": "not_applicable"
+    },
+    {
+      "id": "recipe.quality.refresh",
+      "methods": [
+        "POST"
+      ],
+      "route": "/api/recipes/quality-review/refresh",
+      "access": "portal",
+      "effect": "create",
+      "resource": "recipe",
+      "authorization": "caller_owned",
+      "csrf": "required",
+      "audit": "mutation_event",
+      "legacy_handling": "not_applicable"
+    },
+    {
+      "id": "recipe.quality.review",
+      "methods": [
+        "PUT"
+      ],
+      "route": "/api/recipes/quality-review/<proposal_id>",
+      "access": "portal",
+      "effect": "update",
+      "resource": "recipe",
+      "authorization": "owner_only",
+      "csrf": "required",
+      "audit": "mutation_event",
+      "legacy_handling": "owner_migration_required"
+    },
+    {
+      "id": "recipe.viewed.update",
+      "methods": [
+        "POST"
+      ],
+      "route": "/api/recipes/<recipe_id>/viewed",
+      "access": "portal",
+      "effect": "activity",
+      "resource": "recipe_activity",
+      "authorization": "personal_state",
+      "csrf": "required",
+      "audit": "activity_event",
+      "legacy_handling": "preserve_personal_state"
+    },
+    {
+      "id": "recipe.favorite.update",
+      "methods": [
+        "POST"
+      ],
+      "route": "/api/recipes/<recipe_id>/favorite",
+      "access": "portal",
+      "effect": "update",
+      "resource": "recipe_activity",
+      "authorization": "personal_state",
+      "csrf": "required",
+      "audit": "mutation_event",
+      "legacy_handling": "preserve_personal_state"
+    },
+    {
+      "id": "recipe.update",
+      "methods": [
+        "PUT"
+      ],
+      "route": "/api/recipes/<recipe_id>",
+      "access": "portal",
+      "effect": "update",
+      "resource": "recipe",
+      "authorization": "owner_or_contributor_or_legacy_shared",
+      "csrf": "required",
+      "audit": "mutation_event",
+      "legacy_handling": "preserve_shared_legacy_collaboration"
+    },
+    {
+      "id": "recipe.made.update",
+      "methods": [
+        "POST"
+      ],
+      "route": "/api/recipes/<recipe_id>/made",
+      "access": "portal",
+      "effect": "activity",
+      "resource": "recipe_activity",
+      "authorization": "personal_state",
+      "csrf": "required",
+      "audit": "activity_event",
+      "legacy_handling": "preserve_personal_state"
+    },
+    {
+      "id": "recipe.trash",
+      "methods": [
+        "DELETE"
+      ],
+      "route": "/api/recipes/<recipe_id>",
+      "access": "portal",
+      "effect": "destructive",
+      "resource": "recipe",
+      "authorization": "owner_or_contributor_or_legacy_shared",
+      "csrf": "required",
+      "audit": "mutation_event",
+      "legacy_handling": "preserve_shared_legacy_collaboration",
+      "retention": {
+        "mode": "soft_delete",
+        "implementation": "domain_pending",
+        "minimum_days": 30,
+        "confirmation": "none",
+        "backup_gate": "required_before_permanent_delete",
+        "restore_route_id": "recipe.restore"
+      }
+    },
+    {
+      "id": "recipe.restore",
+      "methods": [
+        "POST"
+      ],
+      "route": "/api/recipes/<recipe_id>/restore",
+      "access": "portal",
+      "effect": "restore",
+      "resource": "recipe",
+      "authorization": "owner_or_contributor_or_legacy_shared",
+      "csrf": "required",
+      "audit": "mutation_event",
+      "legacy_handling": "preserve_shared_legacy_collaboration",
+      "retention": {
+        "mode": "soft_delete",
+        "implementation": "domain_pending",
+        "minimum_days": 30,
+        "confirmation": "none",
+        "backup_gate": "required_before_permanent_delete"
+      }
+    },
+    {
+      "id": "recipe.recommendation.create",
+      "methods": [
+        "POST"
+      ],
+      "route": "/api/recipes/recommend",
+      "access": "portal",
+      "effect": "activity",
+      "resource": "recipe_recommendation",
+      "authorization": "household_service_action",
+      "csrf": "required",
+      "audit": "activity_event",
+      "legacy_handling": "not_applicable"
+    },
+    {
+      "id": "recipe.weekly_plan.update",
+      "methods": [
+        "POST"
+      ],
+      "route": "/api/recipes/weekly-plan",
+      "access": "portal",
+      "effect": "update",
+      "resource": "recipe_weekly_plan",
+      "authorization": "household_service_action",
+      "csrf": "required",
+      "audit": "mutation_event",
+      "legacy_handling": "not_applicable"
+    },
+    {
+      "id": "mytube.collection.create",
+      "methods": [
+        "POST"
+      ],
+      "route": "/api/mytube/collections",
+      "access": "portal",
+      "effect": "create",
+      "resource": "media_collection",
+      "authorization": "caller_owned",
+      "csrf": "required",
+      "audit": "mutation_event",
+      "legacy_handling": "not_applicable"
+    },
+    {
+      "id": "mytube.collection.member.put",
+      "methods": [
+        "PUT"
+      ],
+      "route": "/api/mytube/collections/<collection_id>/videos/<video_id>",
+      "access": "portal",
+      "effect": "update",
+      "resource": "media_collection_membership",
+      "authorization": "owner_or_contributor",
+      "csrf": "required",
+      "audit": "mutation_event",
+      "legacy_handling": "owner_migration_required"
+    },
+    {
+      "id": "mytube.collection.member.remove",
+      "methods": [
+        "DELETE"
+      ],
+      "route": "/api/mytube/collections/<collection_id>/videos/<video_id>",
+      "access": "portal",
+      "effect": "update",
+      "resource": "media_collection_membership",
+      "authorization": "owner_or_contributor",
+      "csrf": "required",
+      "audit": "mutation_event",
+      "legacy_handling": "owner_migration_required"
+    },
+    {
+      "id": "mytube.upload.create",
+      "methods": [
+        "POST"
+      ],
+      "route": "/api/mytube/uploads",
+      "access": "portal",
+      "effect": "upload",
+      "resource": "media",
+      "authorization": "caller_owned",
+      "csrf": "required",
+      "audit": "mutation_event",
+      "legacy_handling": "not_applicable"
+    },
+    {
+      "id": "mytube.upload.patch",
+      "methods": [
+        "PATCH"
+      ],
+      "route": "/api/mytube/uploads/<upload_id>",
+      "access": "portal",
+      "effect": "update",
+      "resource": "media",
+      "authorization": "owner_only",
+      "csrf": "required",
+      "audit": "mutation_event",
+      "legacy_handling": "owner_migration_required"
+    },
+    {
+      "id": "mytube.upload.finalize",
+      "methods": [
+        "POST"
+      ],
+      "route": "/api/mytube/uploads/<upload_id>/finalize",
+      "access": "portal",
+      "effect": "create",
+      "resource": "media",
+      "authorization": "caller_owned",
+      "csrf": "required",
+      "audit": "mutation_event",
+      "legacy_handling": "not_applicable"
+    },
+    {
+      "id": "mytube.upload.cancel",
+      "methods": [
+        "DELETE"
+      ],
+      "route": "/api/mytube/uploads/<upload_id>",
+      "access": "portal",
+      "effect": "update",
+      "resource": "media",
+      "authorization": "owner_only",
+      "csrf": "required",
+      "audit": "mutation_event",
+      "legacy_handling": "owner_migration_required"
+    },
+    {
+      "id": "mytube.progress.update",
+      "methods": [
+        "PUT"
+      ],
+      "route": "/api/mytube/videos/<video_id>/progress",
+      "access": "portal",
+      "effect": "activity",
+      "resource": "media_personal_state",
+      "authorization": "personal_state",
+      "csrf": "required",
+      "audit": "activity_event",
+      "legacy_handling": "preserve_personal_state"
+    },
+    {
+      "id": "mytube.video.trash",
+      "methods": [
+        "DELETE"
+      ],
+      "route": "/api/mytube/videos/<video_id>",
+      "access": "portal",
+      "effect": "destructive",
+      "resource": "media",
+      "authorization": "owner_only",
+      "csrf": "required",
+      "audit": "mutation_event",
+      "legacy_handling": "owner_migration_required",
+      "retention": {
+        "mode": "soft_delete",
+        "implementation": "domain_pending",
+        "minimum_days": 30,
+        "confirmation": "none",
+        "backup_gate": "required_before_permanent_delete",
+        "restore_route_id": "mytube.video.restore"
+      }
+    },
+    {
+      "id": "mytube.video.restore",
+      "methods": [
+        "POST"
+      ],
+      "route": "/api/mytube/videos/<video_id>/restore",
+      "access": "portal",
+      "effect": "restore",
+      "resource": "media",
+      "authorization": "owner_only",
+      "csrf": "required",
+      "audit": "mutation_event",
+      "legacy_handling": "owner_migration_required",
+      "retention": {
+        "mode": "soft_delete",
+        "implementation": "domain_pending",
+        "minimum_days": 30,
+        "confirmation": "none",
+        "backup_gate": "required_before_permanent_delete"
+      }
+    },
+    {
+      "id": "mytube.media_link.create",
+      "methods": [
+        "POST"
+      ],
+      "route": "/api/mytube/media-links",
+      "access": "portal",
+      "effect": "update",
+      "resource": "media",
+      "authorization": "owner_only",
+      "csrf": "required",
+      "audit": "mutation_event",
+      "legacy_handling": "owner_migration_required"
+    },
+    {
+      "id": "mytube.media_link.delete",
+      "methods": [
+        "DELETE"
+      ],
+      "route": "/api/mytube/media-links/<media_id>",
+      "access": "portal",
+      "effect": "update",
+      "resource": "media",
+      "authorization": "owner_only",
+      "csrf": "required",
+      "audit": "mutation_event",
+      "legacy_handling": "owner_migration_required"
+    },
+    {
+      "id": "system.settings",
+      "methods": [
+        "POST"
+      ],
+      "route": "/api/admin/operations/<operation>",
+      "access": "admin",
+      "effect": "system",
+      "resource": "system_settings",
+      "authorization": "system_admin",
+      "csrf": "required",
+      "audit": "security_event",
+      "legacy_handling": "not_applicable"
+    }
+  ]
+}

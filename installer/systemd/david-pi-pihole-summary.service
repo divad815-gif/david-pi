@@ -1,0 +1,12 @@
+[Unit]
+Description=David-Pi aggregate statistics from an explicitly connected local Pi-hole
+ConditionPathExists=/etc/david-pi/pihole.json
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /usr/local/lib/david-pi/installer/host.py pihole-summary
+UMask=0077
+ProtectSystem=strict
+ReadWritePaths=/run/david-pi /etc/david-pi
+PrivateTmp=true
+NoNewPrivileges=true

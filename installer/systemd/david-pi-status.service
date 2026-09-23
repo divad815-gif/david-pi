@@ -1,0 +1,13 @@
+[Unit]
+Description=David-Pi aggregate host health collector
+ConditionPathExists=/etc/david-pi/installation.json
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /usr/local/lib/david-pi/scripts/collect_server_status.py
+UMask=0022
+ProtectSystem=strict
+ReadWritePaths=/run/david-pi
+PrivateTmp=true
+NoNewPrivileges=true

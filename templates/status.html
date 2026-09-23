@@ -1,41 +1,56 @@
+{%- set davidpi_theme = 'dark' if request is defined and request.cookies.get('davidPiThemeV1') == 'dark' else 'light' -%}
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="{{ davidpi_theme }}">
 <head>
+  <meta name="server-name" content="{{ server_name }}">
+  <script type="application/json" id="installation-config">{{ public_installation|tojson }}</script>
+  <script src="/static/installation.js?v=2"></script>
+  <meta name="audiobook-progress-scope" content="{{ audiobook_progress_scope }}">
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=auto">
   <meta name="theme-color" content="#fffaf2">
+  <meta name="color-scheme" content="{{ davidpi_theme }}">
+  <script src="/static/theme-bootstrap.js?v=8"></script>
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-title" content="David-Pi">
-  <title>Server status · David-Pi</title>
+  <meta name="apple-mobile-web-app-title" content="{{ server_name }}">
+  <title>Server status · {{ server_name }}</title>
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" type="image/png" sizes="32x32" href="/david-pi-icon-32.png">
   <link rel="apple-touch-icon" sizes="180x180" href="/david-pi-icon-180.png">
-  <link rel="stylesheet" href="/static/app.css?v=16">
+  <link rel="stylesheet" href="/static/app.css?v=40">
+  <link rel="stylesheet" href="/static/status-enhancements.css?v=3">
+  <link rel="stylesheet" href="/static/david-pi-ui.css?v=16">
   <meta name="csrf-token" content="{{ csrf_token }}">
 </head>
 <body class="status-page">
   <header class="photo-bar status-bar">
     <a class="back" href="/" aria-label="Back home">&larr;</a>
-    <div><p>David-Pi</p><h1>Server health</h1></div>
+    <div><p>{{ server_name }}</p><h1>Server health</h1></div>
     <span class="live-pill" id="overallPill" data-state="unavailable"><i></i><span>Connecting</span></span>
   </header>
   <main class="dashboard-shell health-dashboard">
     <section class="health-hero" id="healthHero" data-state="unavailable">
-      <div><p class="hello">At a glance</p><h2 id="overallTitle">Checking David-Pi…</h2></div>
+      <div><p class="hello">At a glance</p><h2 id="overallTitle">Checking {{ server_name }}…</h2></div>
       <p id="lastUpdated">Waiting for the latest private health snapshot.</p>
     </section>
 
-    <section class="classic-status-overview" aria-label="Live server overview">
-      <div class="dashboard-intro"><div><p class="hello">Home server</p><h2>Everything at a glance.</h2></div><p id="classicUpdated">Checking live readings&hellip;</p></div>
+    <section class="classic-status-overview" aria-label="Live Pi and portal overview">
+      <div class="dashboard-intro"><div><p class="hello">Pi and portal</p><h2>Everything at a glance.</h2></div><p id="classicUpdated">Checking live readings&hellip;</p></div>
       <div class="metric-grid">
-        <article class="metric" id="cpuMetric" data-health="unknown"><div class="metric-top"><span>CPU</span><b id="cpuValue">&mdash;</b></div><div class="meter"><i id="cpuMeter"></i></div><div class="metric-foot"><small id="cpuDetail">Checking load</small><em id="cpuHealth">Checking</em></div></article>
-        <article class="metric" id="memoryMetric" data-health="unknown"><div class="metric-top"><span>Memory</span><b id="memoryValue">&mdash;</b></div><div class="meter"><i id="memoryMeter"></i></div><div class="metric-foot"><small id="memoryDetail">Checking RAM</small><em id="memoryHealth">Checking</em></div></article>
-        <article class="metric" id="storageMetric" data-health="unknown"><div class="metric-top"><span>Storage</span><b id="storageValue">&mdash;</b></div><div class="meter"><i id="storageMeter"></i></div><div class="metric-foot"><small id="storageDetail">Checking drive</small><em id="storageHealth">Checking</em></div></article>
+        <article class="metric" id="cpuMetric" data-health="unknown"><div class="metric-top"><span>Portal CPU</span><b id="cpuValue">&mdash;</b></div><div class="meter"><i id="cpuMeter"></i></div><div class="metric-foot"><small id="cpuDetail">Checking load</small><em id="cpuHealth">Checking</em></div></article>
+        <article class="metric" id="memoryMetric" data-health="unknown"><div class="metric-top"><span>Host memory</span><b id="memoryValue">&mdash;</b></div><div class="meter"><i id="memoryMeter"></i></div><div class="metric-foot"><small id="memoryDetail">Checking RAM</small><em id="memoryHealth">Checking</em></div></article>
+        <article class="metric" id="storageMetric" data-health="unknown"><div class="metric-top"><span>Family storage</span><b id="storageValue">&mdash;</b></div><div class="meter"><i id="storageMeter"></i></div><div class="metric-foot"><small id="storageDetail">Checking drive</small><em id="storageHealth">Checking</em></div></article>
         <article class="metric temperature" id="temperatureMetric" data-health="unknown"><div class="metric-top"><span>Temperature</span><b id="temperatureValue">&mdash;</b></div><div class="temperature-scale"><i id="temperatureMeter"></i></div><div class="metric-foot"><small id="temperatureDetail">Checking uptime</small><em id="temperatureHealth">Checking</em></div></article>
       </div>
     </section>
 
-    <section class="health-card-grid" id="healthCards" aria-label="David-Pi health checks">
+    <section class="panel" id="attentionPanel" hidden aria-labelledby="attentionTitle">
+      <h2 id="attentionTitle">Needs attention</h2><ul id="attentionItems"></ul>
+    </section>
+    <section class="panel" aria-labelledby="recoveryTitle">
+      <h2 id="recoveryTitle">Recovery readiness</h2><p id="recoverySummary">Checking local backups…</p>
+    </section>
+    <section class="health-card-grid" id="healthCards" aria-label="{{ server_name }} health checks">
       <p class="health-loading">Collecting server health…</p>
     </section>
 
@@ -49,7 +64,7 @@
             <option value="memory">RAM</option>
             <option value="swap">Swap</option>
             <option value="hdd">External drive</option>
-            <option value="microsd">OS disk</option>
+            <option value="microsd">MicroSD</option>
             <option value="container_memory">Portal memory</option>
             <option value="health_latency">Health response</option>
             <option value="queue">Queue depth</option>
@@ -58,14 +73,21 @@
           <label>Range<select id="historyRange"><option value="24h">24 hours</option><option value="7d">7 days</option><option value="30d">30 days</option></select></label>
         </div>
       </div>
+      <p class="status-history-summary" id="historySummary" role="status">Loading temperature history…</p>
       <div class="status-chart-wrap">
-        <svg id="historyChart" viewBox="0 0 900 260" role="img" aria-label="Selected server health history"></svg>
-        <p class="chart-empty" id="historyEmpty">History will fill in every five minutes.</p>
+        <svg id="historyChart" viewBox="0 0 900 260" role="img" aria-labelledby="historyChartTitle historyChartDescription"></svg>
+        <div class="chart-empty" id="historyEmpty"><p id="historyEmptyText">History will fill in every five minutes.</p><button type="button" id="historyRetry" hidden>Try again</button></div>
       </div>
+      <details class="status-history-values">
+        <summary id="historyValuesSummary">View recorded values</summary>
+        <div class="status-history-table-wrap">
+          <table><caption id="historyCaption">Temperature readings</caption><thead><tr><th scope="col">Date and time</th><th scope="col">Value</th></tr></thead><tbody id="historyRows"></tbody></table>
+        </div>
+      </details>
     </section>
 
     <details class="panel database-panel">
-      <summary><span><small>Application storage</small><strong>Seven databases</strong></span><b id="databaseState">Checking</b></summary>
+      <summary><span><small>Application storage</small><strong id="databaseCount">Checking databases</strong></span><b id="databaseState">Checking</b></summary>
       <div class="database-list" id="databaseList"></div>
       <p class="privacy-note">Only file sizes, timestamps, and health results are shown. No records or personal content are included.</p>
     </details>
@@ -74,17 +96,17 @@
       <div>
         <p class="hello">Power</p>
         <h2>Shut down safely</h2>
-        <p id="safeShutdownSummary">Use this before unplugging or working on David-Pi.</p>
+        <p id="safeShutdownSummary">Use this before unplugging or working on {{ server_name }}.</p>
       </div>
-      <button type="button" id="safeShutdownButton">Shut down David-Pi</button>
+      <button type="button" id="safeShutdownButton">Shut down {{ server_name }}</button>
     </section>
 
-    <dialog class="safe-shutdown-dialog" id="safeShutdownDialog">
+    <dialog class="safe-shutdown-dialog" id="safeShutdownDialog" aria-labelledby="safeShutdownTitle" aria-describedby="safeShutdownCopy">
       <form id="safeShutdownForm">
         <button class="shutdown-close" id="safeShutdownClose" type="button" aria-label="Cancel shutdown">&times;</button>
         <p class="hello">Safe power off</p>
-        <h2>Shut down David-Pi?</h2>
-        <p>The website will disconnect. Wait for the Pi's activity light to stop before removing power.</p>
+        <h2 id="safeShutdownTitle">Shut down {{ server_name }}?</h2>
+        <p id="safeShutdownCopy">The website will disconnect. Wait for the Pi's activity light to stop before removing power.</p>
         <label for="shutdownPassword">Shutdown password</label>
         <input id="shutdownPassword" name="password" type="password" maxlength="128" autocomplete="current-password" required>
         <p class="shutdown-error" id="shutdownError" role="alert" aria-live="polite"></p>
@@ -97,7 +119,9 @@
 
     <p class="dashboard-note">Health refreshes every three minutes. Open a card for details and a suggested next step.</p>
   </main>
-  <script src="/static/status.js?v=6" defer></script>
+  <script src="/static/david-pi-ui.js?v=15" defer></script>
+  <script src="/static/mobile-dialog-host.js?v=10" defer></script>
+  <script src="/static/status.js?v=13" defer></script>
   <script>if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js');</script>
 </body>
 </html>

@@ -1,0 +1,18 @@
+[Unit]
+Description=David-Pi selected application modules
+After=docker.service david-pi-helper.service
+Requires=docker.service david-pi-helper.service
+ConditionPathExists=/etc/david-pi/installation.json
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStartPre=/usr/bin/python3 /usr/local/lib/david-pi/installer/host.py storage-guard
+ExecStartPre=/usr/bin/python3 /usr/local/lib/david-pi/scripts/collect_server_status.py
+ExecStart=/usr/bin/docker compose --project-name david-pi -f /etc/david-pi/compose.json up -d --remove-orphans --wait --wait-timeout 180
+ExecStop=/usr/bin/docker compose --project-name david-pi -f /etc/david-pi/compose.json stop
+TimeoutStartSec=300
+TimeoutStopSec=180
+
+[Install]
+WantedBy=multi-user.target

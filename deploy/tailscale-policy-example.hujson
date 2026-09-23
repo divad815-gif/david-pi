@@ -1,13 +1,13 @@
-// EXAMPLE ONLY - replace every placeholder after checking your tailnet.
+// EXAMPLE ONLY — replace every placeholder after checking your tailnet.
 // Do not apply this file as-is.
 {
   "groups": {
     "group:household": ["user:HOUSEHOLD_MEMBER_1", "user:HOUSEHOLD_MEMBER_2"],
-    "group:server-admin": ["user:ADMIN_ACCOUNT"]
+    "group:david-admin": ["user:DAVID_ACCOUNT"]
   },
   "tagOwners": {
-    "tag:david-pi": ["group:server-admin"],
-    "tag:david-admin-device": ["group:server-admin"]
+    "tag:david-pi": ["group:david-admin"],
+    "tag:david-admin-device": ["group:david-admin"]
   },
   "grants": [
     {
@@ -31,7 +31,7 @@
       "action": "check",
       "src": ["tag:david-admin-device"],
       "dst": ["tag:david-pi"],
-      "users": ["LINUX_ADMIN_USERNAME"]
+      "users": ["divad815"]
     }
   ]
 }

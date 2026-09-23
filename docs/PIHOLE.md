@@ -1,30 +1,25 @@
-# Pi-hole setup
+# Optional Pi-hole integration
 
-Pi-hole is optional. The installer exposes DNS on port 53 and binds its web
-administration page only to host loopback port 8081. The portal receives only a
-sanitized aggregate snapshot; it does not mount the complete Pi-hole data
-directory.
+Skip Pi-hole to keep the portal independent of household DNS. Enabling the
+module and changing router DNS are separate decisions.
 
-The default list is HaGeZi Light, selected for broad household ad/tracker
-coverage with a relatively low risk of breaking ordinary sites. The installer
-backs up `gravity.db` before changing the enabled adlist and then rebuilds
-gravity. It does not print query history, client addresses, or domains.
+For an existing local supported Pi-hole instance, run `sudo david-pi pihole-setup`
+and enter the absolute host path of its `pihole-FTL.db` file. With Docker, use
+the database inside its persistent host volume. The integration reads aggregate
+statistics only; it does not change DNS, query records or the Pi-hole database.
 
-Before changing router or Tailscale DNS, verify directly:
+For a new instance, install Pi-hole separately and review
+[Pi-hole’s official requirements](https://docs.pi-hole.net/main/prerequisites/).
+Do not overwrite an existing service occupying DNS port 53 or a management
+port. Keep the management interface private. Read the default blocking-list
+choice in the guided step before applying it; retain existing configuration
+when connecting an already configured Pi-hole.
 
-```bash
-dig example.com @PI_LAN_ADDRESS
-dig doubleclick.net @PI_LAN_ADDRESS
-docker exec pihole pihole status
-```
+Before changing router or Tailscale DNS, test DNS directly against the new
+instance on one device. Record that device's old DNS values and confirm normal
+websites still resolve. Only then change additional clients deliberately.
+If resolution fails, restore the previous DNS values first and diagnose Pi-hole.
 
-Then change one test device first. A public "secondary DNS" is not a true
-failover on many clients: clients may use it at any time and bypass blocking.
-For deterministic filtering plus DNS redundancy, operate a second independent
-Pi-hole. If availability is more important than complete blocking, a public
-secondary is an explicit tradeoff.
-
-Router and Tailscale DNS changes are manual because their interfaces and
-failure behavior are outside the Pi. Record the old values before changing
-them. Never configure Pi-hole as its own upstream resolver.
-
+A public secondary DNS can bypass blocking because many clients use either
+resolver at any time. For filtering with redundancy, use a second independent
+working Pi-hole. Never configure Pi-hole as its own upstream resolver.

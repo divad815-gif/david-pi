@@ -1,104 +1,61 @@
 # David-Pi
 
-David-Pi is a private household server for Raspberry Pi and repurposed 64-bit
-Linux computers. It combines
-photos and videos, files, notes, recipes, movies and TV, games, Date Night,
-audiobooks, household chat, phone backup, and server health behind private
-Tailscale HTTPS.
+A private household server for photos, videos, files, notes, recipes, watchlists,
+audiobooks, games, household chat and Android phone backup. Use your own website
+name—such as **John’s home**—and a Tailscale hostname such as **john-pi**.
 
-The public project contains no household data, API keys, Tailscale identity,
-SSH keys, passwords, databases, or signing keys.
+**Portable release 10.0.0 is in development. It is not published or ready for
+household installation yet.** Publication is blocked until the VM, restore,
+Android, Raspberry Pi and newcomer checks pass. Existing GitHub downloads may
+belong to the older installer. See [release status](docs/RELEASE.md).
 
-## Supported hosts
+![Setup flow: machine, Tailscale, administrator, name and storage, modules](docs/images/setup-flow.svg)
 
-- Raspberry Pi 4 or Raspberry Pi 5 (`arm64`)
-- 64-bit Intel/AMD desktops, mini PCs, and laptops (`amd64`)
-- Raspberry Pi OS Lite / Debian 12 or 13
-- Ubuntu Server 22.04 or 24.04 LTS
-- At least 4 GB RAM, two CPU cores, and 8 GiB free on the OS disk
-- Ethernet recommended
-- Optional dedicated ext4 primary data disk, internal or external
-- Optional physically separate ext4 backup disk
+## What you need
 
-## Before running the installer
+- Raspberry Pi 4/5 running 64-bit Raspberry Pi OS based on Debian 13, or an
+  Intel/AMD PC running Debian 13 or Ubuntu Server 24.04 LTS.
+- At least 4 GB memory, two CPU cores and 8 GiB free OS space; additional space
+  for household content. Ethernet is recommended.
+- A Tailscale account and Tailscale on the phone/computer used for setup.
+- An existing folder on a local ext4 filesystem or a prepared local ext4 drive.
+  A separate backup drive is recommended and can be added later.
 
-For a Pi, use Raspberry Pi Imager. For a repurposed computer, install a minimal
-supported Debian or Ubuntu Server image. Then:
+Each member uses their own Tailscale identity and must be admitted to the portal.
+Tailscale is required. Movie search, online recipes, browser notifications and
+Pi-hole are optional. A manual movie watchlist and local recipes work without
+provider accounts. No streaming-service passwords are needed.
 
-1. Choose a hostname such as `david-pi`.
-2. Create your own administrator username and a strong temporary password.
-3. Configure Wi-Fi only if Ethernet will not be used.
-4. Enable SSH.
-5. Boot the server and connect once with SSH.
+## Install after the stable release is available
 
-David-Pi intentionally has no shared default SSH username or password.
+Open a terminal on the server, then run:
 
-## Install from a release
-
-After installing a supported native Linux OS, run the public, checksum-verifying
-bootstrap:
-
-```bash
-sudo apt-get update &&
-sudo apt-get install -y ca-certificates curl &&
-curl -fsSL https://github.com/divad815-gif/david-pi/releases/latest/download/install.sh |
-sudo bash
+```sh
+curl -fsSL https://github.com/divad815-gif/david-pi/releases/latest/download/install.sh | sudo bash
 ```
 
-To inspect the exact installer before giving it root access:
+The command verifies release files, checks the machine, connects Tailscale and
+prints a private setup link. Open it on a device signed into your Tailscale
+network. Follow the wizard to claim ownership, choose the name and storage,
+select modules, skip or configure integrations, and verify the installation.
+If `curl` is unavailable, install it and `ca-certificates` using your operating
+system’s package manager first. [Read the complete installation guide](docs/INSTALL.md)
+for inspection before execution and the first-boot checklist.
 
-```bash
-curl -fsSLO https://github.com/divad815-gif/david-pi/releases/latest/download/install.sh
-curl -fsSLO https://github.com/divad815-gif/david-pi/releases/latest/download/install.sh.sha256
-sha256sum -c install.sh.sha256
-less install.sh
-sudo bash install.sh
-```
+## Guides
 
-The bootstrap validates the host, downloads the release archive and manifest to
-a private temporary directory, verifies SHA-256 before extraction, pins the
-published multi-architecture container by digest, starts the resumable wizard,
-and removes temporary downloads. It rejects Windows, WSL, unsupported Linux
-releases, unsupported CPU architectures, and insufficient resources.
+- [Tailscale and private access](docs/TAILSCALE.md)
+- [Storage and prepared drives](docs/STORAGE.md)
+- [Household accounts and naming](docs/HOUSEHOLD.md)
+- [Optional services and API keys](docs/INTEGRATIONS.md)
+- [Android companion](docs/ANDROID.md)
+- [Backup and restore](docs/RECOVERY.md)
+- [Updates](docs/UPDATES.md) · [Troubleshooting](docs/TROUBLESHOOTING.md)
+- [Developer VM testing](tools/vm/README.md) · [Release gates](docs/RELEASE.md)
 
-For source development, use `compose.dev.yaml`; production never compiles the
-application on the target host.
+Production uses verified image digests, never a source build on the server. The
+portal is unprivileged and cannot run arbitrary system commands. Uninstalling
+the application preserves content by default. A local recovery snapshot before
+an update is not a substitute for an independent backup.
 
-The wizard detects Pi, laptop, or generic-server hardware, sizes container
-limits from available resources, performs preflight checks, protects SSH access, discovers storage,
-installs the portal, configures private Tailscale Serve, offers Pi-hole and
-TMDB setup, configures backups, and runs final verification.
-
-## Management commands
-
-```text
-sudo david-pi setup
-sudo david-pi preflight
-sudo david-pi status
-sudo david-pi verify
-sudo david-pi update --from RELEASE.tgz --sha256 HASH --image GHCR_IMAGE@sha256:DIGEST
-sudo david-pi backup
-sudo david-pi restore-test
-sudo david-pi repair
-sudo david-pi support-bundle
-sudo david-pi uninstall-app
-```
-
-`uninstall-app` does not erase `/srv/data` or a configured backup disk.
-
-## Safety principles
-
-- The portal binds only to `127.0.0.1:8090`.
-- Tailscale Serve supplies private HTTPS; Funnel remains disabled.
-- Storage is mounted by UUID and verified with a sentinel.
-- The portal fails closed when storage is missing.
-- Disk formatting is never automatic and requires a separate typed confirmation.
-- Password SSH is not disabled until a second key-authenticated session is confirmed.
-- API keys and notification credentials never enter source or Docker image layers.
-- A backup is called independent only when it is on another physical device.
-- Laptop lid/suspend protection is explicit and is never applied to a non-laptop automatically.
-- Pi-only readings become unavailable on generic Linux instead of breaking health collection.
-
-See [docs/INSTALL.md](docs/INSTALL.md), [docs/TAILSCALE.md](docs/TAILSCALE.md),
-[docs/PIHOLE.md](docs/PIHOLE.md), [docs/LAPTOPS.md](docs/LAPTOPS.md), and
-[docs/RECOVERY.md](docs/RECOVERY.md).
+Licensed under [AGPL-3.0](LICENSE). The original Git history is preserved.

@@ -1,0 +1,26 @@
+[Unit]
+Description=Send content-free success heartbeat for %i
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+LoadCredential=healthcheck-url:/etc/david-pi/healthchecks/%i.url
+Environment=DAVID_PI_HEALTHCHECK_URL_FILE=healthcheck-url
+ExecStart=/usr/local/sbin/david-pi-healthcheck-ping success
+UMask=0077
+NoNewPrivileges=true
+PrivateDevices=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+RestrictAddressFamilies=AF_INET AF_INET6
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+TimeoutStartSec=20

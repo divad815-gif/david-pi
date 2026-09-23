@@ -1,44 +1,60 @@
+{%- set davidpi_theme = 'dark' if request is defined and request.cookies.get('davidPiThemeV1') == 'dark' else 'light' -%}
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="{{ davidpi_theme }}">
 <head>
+  <meta name="server-name" content="{{ server_name }}">
+  <script type="application/json" id="installation-config">{{ public_installation|tojson }}</script>
+  <script src="/static/installation.js?v=2"></script>
+  <meta name="audiobook-progress-scope" content="{{ audiobook_progress_scope }}">
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=auto">
   <meta name="csrf-token" content="{{ csrf_token }}">
   <meta name="theme-color" content="#fffaf2">
-  <title>Date Night · David-Pi</title>
-  <link rel="stylesheet" href="/static/app.css?v=14">
-  <link rel="stylesheet" href="/static/platform.css?v=16">
+  <meta name="color-scheme" content="{{ davidpi_theme }}">
+  <script src="/static/theme-bootstrap.js?v=8"></script>
+  <title>Date Night · {{ server_name }}</title>
+  <link rel="stylesheet" href="/static/app.css?v=40">
+  <link rel="stylesheet" href="/static/platform.css?v=25">
+  <link rel="stylesheet" href="/static/places.css?v=1">
+  <link rel="stylesheet" href="/static/david-pi-ui.css?v=16">
 </head>
 <body class="module-page" data-cuisines="{{ cuisines|tojson|forceescape }}">
   <header class="module-bar">
     <a class="back" href="/" aria-label="Back home">&larr;</a>
-    <div><p>David-Pi</p><h1>Date Night</h1></div>
-    <button class="round-primary compact-primary" id="openRestaurant">+ Add</button>
+    <div><p>{{ server_name }}</p><h1>Date Night</h1></div>
+    <button class="round-primary compact-primary" id="openRestaurant" type="button">+ Add</button>
   </header>
   <main class="module-shell places-shell">
     <section class="module-intro places-intro">
-      <div><p class="sheet-kicker">Dinner plans</p><h2>Where should we go?</h2><p>Save places, remember favorites, and let David-Pi choose.</p></div>
+      <div><p class="sheet-kicker">Dinner plans</p><h2>Where should we go?</h2><p>Save places, remember favorites, and let {{ server_name }} choose.</p></div>
     </section>
     <nav class="places-tabs" id="placesTabs" aria-label="Date Night sections">
-      <button class="selected" data-tab="want_to_go">Want to go</button>
-      <button data-tab="reviewed">Reviewed</button>
-      <button data-tab="choose">Choose for us</button>
-      <button data-tab="margaritas">Chili's Margs</button>
+      <button type="button" class="selected" data-tab="want_to_go" aria-pressed="true">Want to go</button>
+      <button type="button" data-tab="reviewed" aria-pressed="false">Reviewed</button>
+      <button type="button" data-tab="choose" aria-pressed="false">Choose for us</button>
+      <button type="button" data-tab="margaritas" aria-pressed="false">Chili's Margs</button>
+      <button type="button" data-tab="trash" aria-pressed="false">Trash</button>
     </nav>
 
     <section id="restaurantPanel">
       <div class="places-tools">
-        <label class="module-search"><span aria-hidden="true">&#8981;</span><input id="restaurantSearch" type="search" maxlength="120" placeholder="Search restaurants or food"></label>
+        <label class="module-search"><span aria-hidden="true">&#8981;</span><input id="restaurantSearch" type="search" maxlength="120" placeholder="Search restaurants or food" aria-label="Search restaurants or food"></label>
         <select id="restaurantSort" aria-label="Sort restaurants">
           <option value="recent">Recently updated</option>
           <option value="rating">Highest rated</option>
           <option value="name">Name</option>
         </select>
       </div>
-      <section class="restaurant-list" id="restaurantList" aria-live="polite"></section>
-      <section class="module-empty places-empty" id="placesEmpty" hidden>
-        <span aria-hidden="true">&#9733;</span><h2>Start a restaurant list.</h2>
-        <p>Add somewhere you both want to try.</p><button class="big-button" id="emptyAddRestaurant">Add a restaurant</button>
+      <section id="restaurantResults" aria-busy="false">
+        <p class="module-result-count" id="restaurantResultCount" hidden></p>
+        <section class="module-state" id="restaurantsLoading" aria-label="Loading restaurants"><span class="module-spinner" aria-hidden="true"></span><p>Loading restaurants…</p></section>
+        <section class="restaurant-list" id="restaurantList" hidden></section>
+        <section class="module-empty places-empty" id="placesEmpty" hidden>
+          <span aria-hidden="true">&#9733;</span><h2>Start a restaurant list.</h2>
+          <p>Add somewhere you both want to try.</p><button class="big-button" type="button" id="emptyAddRestaurant">Add a restaurant</button>
+        </section>
+        <section class="module-empty compact-state" id="placesNoResults" hidden><span aria-hidden="true">⌕</span><h2>No matching restaurants.</h2><p>Try a different name or food type.</p></section>
+        <section class="module-empty compact-state" id="placesError" hidden><span aria-hidden="true">!</span><h2>Restaurants didn’t load.</h2><p id="placesErrorText">Check the connection and try again.</p><button class="big-button" type="button" id="placesRetry">Try again</button></section>
       </section>
     </section>
 
@@ -52,41 +68,53 @@
         </fieldset>
         <p class="field-label">Narrow by food type (optional)</p>
         <div class="cuisine-chips chooser-cuisines"></div>
-        <button class="big-button" id="chooseRestaurant">Choose a restaurant</button>
+        <button class="big-button" type="button" id="chooseRestaurant">Choose a restaurant</button>
       </div>
       <article class="choice-result" id="choiceResult" hidden aria-live="polite"></article>
     </section>
 
     <section id="margaritaPanel" hidden>
-      <div class="marg-heading"><div><p class="sheet-kicker">Chili's Marg of the Month</p><h2>A year of margaritas</h2></div><p>Tap a month to add the name, photo, and your half-star rating.</p></div>
-      <section class="marg-grid" id="margGrid" aria-live="polite"></section>
+      <div class="marg-heading"><div><p class="sheet-kicker">Chili's Marg of the Month</p><h2>A year of margaritas</h2></div><p>Open a saved photo full screen, or use Edit to add the name, photo, and your half-star rating.</p></div>
+      <div class="marg-calendar-controls">
+        <label class="text-field">Calendar<select id="margCalendar"><option value="legacy">Year unconfirmed</option></select></label>
+        <button class="secondary-button" id="margPreviousYear" type="button" aria-label="Previous calendar year">← Previous year</button>
+        <button class="secondary-button" id="margNextYear" type="button" aria-label="Next calendar year">Next year →</button>
+      </div>
+      <details id="margAssignYear"><summary>Know which year the existing calendar belongs to?</summary><p>Copy the existing calendar to that year. The original calendar and all of its photos will be preserved. A year with saved entries cannot be replaced.</p><label class="text-field">Year<input id="margAssignYearValue" type="number" min="1900" max="2200" step="1"></label><button class="secondary-button" id="margAssignYearSave" type="button">Copy existing calendar to this year</button><p id="margAssignMessage" role="status"></p></details>
+      <p class="module-notice" id="margaritaMigrationNotice" role="status" hidden>One or more months have multiple older saved versions. Nothing was overwritten; those months need household review before editing.</p>
+      <section id="margaritaResults" aria-busy="false">
+        <section class="module-state" id="margaritasLoading" aria-label="Loading margaritas"><span class="module-spinner" aria-hidden="true"></span><p>Loading margaritas…</p></section>
+        <section class="marg-grid" id="margGrid" hidden></section>
+        <section class="module-empty compact-state" id="margaritasError" hidden><span aria-hidden="true">!</span><h2>Margaritas didn’t load.</h2><p id="margaritasErrorText">Check the connection and try again.</p><button class="big-button" type="button" id="margaritasRetry">Try again</button></section>
+      </section>
     </section>
   </main>
 
-  <dialog class="small-sheet" id="restaurantSheet">
-    <button class="close" id="closeRestaurant">&times;</button>
+  <dialog class="small-sheet" id="restaurantSheet" aria-labelledby="restaurantSheetTitle">
+    <button type="button" class="close" id="closeRestaurant" aria-label="Close restaurant editor">&times;</button>
     <p class="sheet-kicker">Our list</p><h2 id="restaurantSheetTitle">Add a restaurant</h2>
     <label class="text-field">Restaurant name<input id="restaurantName" maxlength="160" autocomplete="off"></label>
     <p class="field-label">What kind of food?</p><div class="cuisine-chips editor-cuisines"></div>
     <label class="text-field">Other food types <small>Separate more than one with commas</small><input id="restaurantCustomCuisine" maxlength="200" placeholder="Cajun, Fusion"></label>
     <label class="text-field">Notes<textarea id="restaurantNotes" maxlength="1500" placeholder="Neighborhood, something to order, or why it sounds good"></textarea></label>
+    <p class="module-notice">Restaurants, photos, and reviews here are shared with Household.</p>
     <label class="marg-photo">Photos from this place<input id="restaurantImage" type="file" accept="image/jpeg,image/png,image/webp,image/heic,image/heif" multiple><span id="restaurantImageLabel">Choose photos</span><small>Up to 12 per restaurant. Add food, drinks, and memories.</small></label>
     <div class="restaurant-new-photo-selection" id="restaurantNewPhotoSelection" hidden><strong id="restaurantSelectedPhotoCount"></strong></div>
     <div class="restaurant-photo-editor" id="restaurantPhotoEditor" hidden></div>
-    <button class="big-button" id="saveRestaurant">Add to our list</button>
-    <p class="upload-message" id="restaurantMessage"></p>
+    <button type="button" class="big-button" id="saveRestaurant">Add to our list</button>
+    <p class="upload-message" id="restaurantMessage" role="status" aria-live="polite"></p>
   </dialog>
 
-  <dialog class="place-photo-viewer" id="placePhotoViewer">
+  <dialog class="place-photo-viewer" id="placePhotoViewer" aria-labelledby="placePhotoCaption">
     <button class="place-photo-close" id="closePlacePhotos" type="button" aria-label="Close photos">&times;</button>
     <button class="place-photo-nav place-photo-prev" id="previousPlacePhoto" type="button" aria-label="Previous photo">&lsaquo;</button>
     <div class="place-photo-stage" id="placePhotoStage"><img id="placePhotoImage" alt=""></div>
     <button class="place-photo-nav place-photo-next" id="nextPlacePhoto" type="button" aria-label="Next photo">&rsaquo;</button>
-    <p class="place-photo-count" id="placePhotoCount"></p>
+    <div class="place-photo-meta"><p class="place-photo-caption" id="placePhotoCaption"></p><p class="place-photo-count" id="placePhotoCount"></p></div>
   </dialog>
 
-  <dialog class="small-sheet" id="reviewSheet">
-    <button class="close" id="closeReview">&times;</button>
+  <dialog class="small-sheet" id="reviewSheet" aria-labelledby="reviewRestaurantName">
+    <button type="button" class="close" id="closeReview" aria-label="Close restaurant review">&times;</button>
     <p class="sheet-kicker">We went!</p><h2 id="reviewRestaurantName">Rate this restaurant</h2>
     <div class="star-picker">
       <output id="reviewStars" aria-live="polite">4 stars</output>
@@ -95,12 +123,12 @@
     </div>
     <label class="text-field">When did you go?<input id="reviewDate" type="date"></label>
     <label class="text-field">What did you think?<textarea id="reviewText" maxlength="5000" placeholder="What was good? What would you order next time?"></textarea></label>
-    <button class="big-button" id="saveReview">Save review</button>
-    <p class="upload-message" id="reviewMessage"></p>
+    <button type="button" class="big-button" id="saveReview">Save review</button>
+    <p class="upload-message" id="reviewMessage" role="status" aria-live="polite"></p>
   </dialog>
 
-  <dialog class="small-sheet" id="margSheet">
-    <button class="close" id="closeMarg">&times;</button>
+  <dialog class="small-sheet" id="margSheet" aria-labelledby="margMonth">
+    <button type="button" class="close" id="closeMarg" aria-label="Close margarita editor">&times;</button>
     <p class="sheet-kicker">Marg of the Month</p><h2 id="margMonth">January</h2>
     <label class="text-field">Margarita name<input id="margName" maxlength="160"></label>
     <div class="star-picker">
@@ -111,16 +139,18 @@
     <label class="marg-photo">Photo<input id="margImage" type="file" accept="image/jpeg,image/png,image/webp,image/heic,image/heif"><span>Choose a photo</span></label>
     <label class="remove-photo" id="removePhotoWrap" hidden><input id="removeMargImage" type="checkbox"> Remove current photo</label>
     <label class="text-field">Notes<textarea id="margReview" maxlength="3000" placeholder="Sweet, tart, strong—what did you think?"></textarea></label>
-    <button class="big-button" id="saveMarg">Save this month</button>
-    <p class="upload-message" id="margMessage"></p>
+    <button type="button" class="big-button" id="saveMarg">Save this month</button>
+    <p class="upload-message" id="margMessage" role="status" aria-live="polite"></p>
+    <div id="margConflict" hidden><p id="margConflictCopy"></p><button class="secondary-button" id="margUseSaved" type="button">Use saved version</button><button class="secondary-button" id="margKeepDraft" type="button">Save my draft instead</button></div>
   </dialog>
 
-  <dialog class="confirm-sheet" id="placeConfirm">
-    <h2>Remove this restaurant?</h2><p>Its saved review will also be removed.</p>
-    <div class="confirm-actions"><button id="cancelPlaceDelete">Cancel</button><button class="danger-button" id="acceptPlaceDelete">Remove</button></div>
+  <dialog class="confirm-sheet" id="placeConfirm" aria-labelledby="placeConfirmTitle" aria-describedby="placeConfirmCopy">
+    <h2 id="placeConfirmTitle">Move this restaurant to trash?</h2><p id="placeConfirmCopy">It leaves the active list but its review and photos remain recoverable for at least 30 days.</p>
+    <div class="confirm-actions"><button type="button" id="cancelPlaceDelete">Cancel</button><button type="button" class="danger-button" id="acceptPlaceDelete">Move to trash</button></div>
   </dialog>
   <div class="toast" id="platformToast" hidden role="status"></div>
-  <script src="/static/mobile-dialog-host.js?v=7" defer></script>
-  <script src="/static/places.js?v=6" defer></script>
+  <script src="/static/david-pi-ui.js?v=15" defer></script>
+  <script src="/static/mobile-dialog-host.js?v=10" defer></script>
+  <script src="/static/places.js?v=14" defer></script>
 </body>
 </html>

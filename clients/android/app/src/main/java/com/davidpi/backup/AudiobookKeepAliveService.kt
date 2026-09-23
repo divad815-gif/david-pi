@@ -32,7 +32,7 @@ class AudiobookKeepAliveService : Service() {
         val notification = NativeMediaRegistry.current?.buildNotification()
             ?: NotificationCompat.Builder(this, AUDIOBOOK_KEEPALIVE_CHANNEL)
                 .setSmallIcon(android.R.drawable.ic_media_play)
-                .setContentTitle("David-Pi Audiobook")
+                .setContentTitle("${com.davidpi.backup.security.CredentialStore(this).displayName} audiobook")
                 .setContentText("Open David-Pi to resume playback")
                 .setOnlyAlertOnce(true)
                 .setOngoing(true)

@@ -23,9 +23,9 @@
     pending.set(id, { resolve, reject });
     socket.send(JSON.stringify({ id, method, params }));
   });
-  const target = process.env.DAVID_PI_VERIFY_URL;
-  if (!target || !target.startsWith('https://')) throw new Error('Set DAVID_PI_VERIFY_URL');
-  await call('Page.navigate', { url: `${target.replace(/\/$/, '')}/chat` });
+  const server = process.env.DAVID_PI_VERIFY_URL;
+  if (!server || !/^https:\/\/[a-z0-9-]+\.[a-z0-9-]+\.ts\.net\/?$/.test(server)) throw new Error('Set DAVID_PI_VERIFY_URL to the approved household HTTPS origin');
+  await call('Page.navigate', { url: `${server.replace(/\/$/, '')}/chat` });
   await new Promise((resolve) => setTimeout(resolve, 3500));
   const evaluated = await call('Runtime.evaluate', {
     expression: `(async () => {

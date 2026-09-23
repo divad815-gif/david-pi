@@ -1,0 +1,41 @@
+{%- set davidpi_theme = 'dark' if request is defined and request.cookies.get('davidPiThemeV1') == 'dark' else 'light' -%}
+<!doctype html>
+<html lang="en" data-theme="{{ davidpi_theme }}">
+<head>
+  <meta name="server-name" content="{{ server_name }}">
+  <script type="application/json" id="installation-config">{{ public_installation|tojson }}</script>
+  <script src="/static/installation.js?v=2"></script>
+  <meta name="audiobook-progress-scope" content="{{ audiobook_progress_scope }}">
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=auto">
+  <meta name="csrf-token" content="{{ csrf_token }}">
+  <meta name="theme-color" content="#fffaf2">
+  <meta name="color-scheme" content="{{ davidpi_theme }}">
+  <script src="/static/theme-bootstrap.js?v=8"></script>
+  <title>This week’s kitchen · {{ server_name }}</title>
+  <link rel="stylesheet" href="/static/app.css?v=40"><link rel="stylesheet" href="/static/platform.css?v=25"><link rel="stylesheet" href="/static/recipe-planner.css?v=3"><link rel="stylesheet" href="/static/recipe-navigation.css?v=1"><link rel="stylesheet" href="/static/david-pi-ui.css?v=16">
+</head>
+<body class="module-page">
+  <header class="module-bar"><a class="back" href="/recipes" aria-label="Back to recipes">&larr;</a><div><p>Recipes</p><h1>This week’s kitchen</h1></div></header>
+  <main class="module-shell recipe-shell">
+    <nav class="recipe-tabs" aria-label="Recipes and weekly kitchen"><a data-recipe-tab href="/recipes">Recipes</a><a data-recipe-tab href="/recipes/weekly-plan" aria-current="page">This week’s kitchen</a></nav>
+    <section id="weeklyPlanner" class="weekly-planner" aria-labelledby="weeklyHeading">
+      <div class="planner-heading"><div><p class="sheet-kicker">Shared with Household</p><h2 id="weeklyHeading">Plan, cook, shop.</h2></div><label class="text-field">Week of<input type="date" id="plannerWeek"></label></div>
+      <p>Choose recipes, then shop one shared list. Amounts keep each recipe's original servings.</p>
+      <div class="planner-status-row"><p id="plannerStatus" role="status" aria-live="polite"></p><button type="button" id="plannerRetry" hidden>Reload week</button></div>
+      <button type="button" id="plannerChoose" data-plan-mutation disabled>Choose recipes</button>
+      <div id="plannerRecipes"></div>
+      <h3>Grocery list <span id="plannerCount"></span></h3>
+      <p>Check items as you shop. Remove things you already have; you can restore them below.</p>
+      <form id="plannerAdd"><label class="text-field">Add anything else<input id="plannerExtra" maxlength="1000" placeholder="Milk, snacks, household essentials" required data-plan-mutation disabled></label><button type="submit" data-plan-mutation disabled>Add item</button></form>
+      <div id="plannerItems"></div>
+      <details><summary>Removed / already have</summary><div id="plannerRemoved"></div></details>
+    </section>
+  </main>
+  <dialog class="small-sheet planner-picker" id="plannerPicker" aria-labelledby="plannerPickerHeading"><button class="close" id="plannerClose" type="button" aria-label="Close recipe selection">&times;</button><h2 id="plannerPickerHeading">Choose this week's recipes</h2><p>Shared recipes are available to both of you. Each recipe is included once.</p><label class="text-field">Search shared recipes<input id="plannerSearch" type="search" maxlength="100"></label><div id="plannerChoices"></div><p id="plannerPickerStatus" role="status"></p></dialog>
+  <script src="/static/david-pi-ui.js?v=15" defer></script>
+  <script src="/static/mobile-dialog-host.js?v=10" defer></script>
+  <script src="/static/recipe-navigation.js?v=1" defer></script>
+  <script src="/static/grocery-groups.js?v=2" defer></script>
+  <script src="/static/recipe-planner.js?v=5" defer></script>
+</body>
+</html>

@@ -9,6 +9,9 @@
   if (!isAndroidWebView || !window.matchMedia('(max-width: 760px)').matches) return;
   const prototype = Object.getPrototypeOf(document.createElement('dialog'));
   if (!prototype || typeof prototype.showModal !== 'function' || typeof prototype.close !== 'function') return;
+  // A partially refreshed static cache must degrade to the native dialog,
+  // never break every dialog because the shared helper is unavailable.
+  if (!window.DavidPiModal) return;
   if (prototype.__davidPiOriginalShowModal) return;
 
   const originalShowModal = prototype.showModal;
@@ -26,8 +29,8 @@
   function viewportSize() {
     const viewport = window.visualViewport;
     return {
-      width: Math.max(280, Math.round(viewport ? viewport.width : window.innerWidth)),
-      height: Math.max(260, Math.round(viewport ? viewport.height : window.innerHeight)),
+      width: Math.max(1, Math.round(viewport ? viewport.width : window.innerWidth)),
+      height: Math.max(1, Math.round(viewport ? viewport.height : window.innerHeight)),
       top: Math.max(0, Math.round(viewport ? viewport.offsetTop : 0))
     };
   }
@@ -39,9 +42,9 @@
     setImportant(host, 'position', 'fixed');
     setImportant(host, 'z-index', String(layer));
     setImportant(host, 'box-sizing', 'border-box');
-    setImportant(host, 'display', 'block');
+    setImportant(host, 'display', dialog.matches('.note-editor') ? 'flex' : 'block');
 
-    if (dialog.matches('.note-editor, .viewer, .file-viewer, .recipe-view, .place-photo-viewer, .movie-search-sheet')) {
+    if (dialog.matches('.note-editor, .viewer, .file-viewer, .recipe-view, .place-photo-viewer, .photo-viewer, .movie-search-sheet')) {
       setImportant(host, 'top', `${viewport.top}px`);
       setImportant(host, 'left', '0px');
       setImportant(host, 'right', 'auto');
@@ -65,7 +68,7 @@
       return;
     }
 
-    const width = Math.max(280, Math.min(480, viewport.width - 24));
+    const width = Math.max(1, Math.min(480, viewport.width - 24));
     const left = Math.max(0, Math.round((viewport.width - width) / 2));
     setImportant(host, 'left', `${left}px`);
     setImportant(host, 'right', 'auto');
@@ -76,21 +79,17 @@
     setImportant(host, 'overflow-x', 'hidden');
     setImportant(host, 'overflow-y', 'auto');
 
-    if (dialog.matches('.small-sheet, .upload-sheet, .assistant-history')) {
-      const height = Math.max(260, Math.min(620, viewport.height - 24));
-      const top = viewport.top + Math.max(8, Math.round((viewport.height - height) / 2));
-      setImportant(host, 'top', `${top}px`);
-      setImportant(host, 'bottom', 'auto');
-      setImportant(host, 'height', `${height}px`);
-      setImportant(host, 'max-height', 'none');
-    } else {
-      const contentHeight = Math.max(120, Math.min(host.scrollHeight || 220, viewport.height - 24));
-      const top = viewport.top + Math.max(8, viewport.height - contentHeight - 12);
-      setImportant(host, 'top', `${top}px`);
-      setImportant(host, 'bottom', 'auto');
-      setImportant(host, 'height', 'auto');
-      setImportant(host, 'max-height', `${Math.max(220, viewport.height - 24)}px`);
-    }
+    // Measure natural content at its final width, then cap it to the actual
+    // visual viewport. A fixed minimum height puts actions behind the keyboard
+    // in landscape and leaves short forms surrounded by empty space.
+    const availableHeight = Math.max(1, viewport.height - 16);
+    setImportant(host, 'min-height', '0');
+    setImportant(host, 'height', 'auto');
+    setImportant(host, 'max-height', `${availableHeight}px`);
+    const contentHeight = Math.min(host.scrollHeight || availableHeight, availableHeight);
+    const top = viewport.top + Math.max(8, Math.round((viewport.height - contentHeight) / 2));
+    setImportant(host, 'top', `${top}px`);
+    setImportant(host, 'bottom', 'auto');
   }
 
   function resizeHosts() {
@@ -143,8 +142,7 @@
     const host = document.createElement('section');
     host.className = `${dialog.className} davidpi-mobile-dialog-host`;
     host.dataset.dialogId = dialog.id || '';
-    host.setAttribute('role', 'dialog');
-    host.setAttribute('aria-modal', 'true');
+    window.DavidPiModal.copySemantics(dialog, host);
     while (dialog.firstChild) host.appendChild(dialog.firstChild);
     dialog.__davidPiMobileHost = host;
     dialog.__davidPiResizeHost = () => sizeHost(dialog, host);
@@ -162,16 +160,29 @@
     });
     enableMediaViewerSwipe(dialog, host);
     syncBackdrop();
-    requestAnimationFrame(() => sizeHost(dialog, host));
-    requestAnimationFrame(() => {
-      const target = host.querySelector('[autofocus], input:not([type="hidden"]), textarea, select, button');
-      if (target && typeof target.focus === 'function') target.focus({preventScroll: true});
+    window.DavidPiModal.activate(host, {
+      returnFocus: dialog.__davidPiReturnFocus,
+      exclusions: [document.querySelector('#david-pi-mobile-dialog-backdrop')],
+      initialFocus: '[autofocus], input:not([type="hidden"]), textarea, select, button'
     });
+    requestAnimationFrame(() => sizeHost(dialog, host));
+    let resizeFrame = null;
+    dialog.__davidPiContentObserver = new MutationObserver(() => {
+      if (resizeFrame !== null) return;
+      resizeFrame = requestAnimationFrame(() => {
+        resizeFrame = null;
+        if (dialog.__davidPiMobileHost === host) sizeHost(dialog, host);
+      });
+    });
+    dialog.__davidPiContentObserver.observe(host, {childList: true, subtree: true, characterData: true});
   }
 
   function unmount(dialog, value) {
     const host = dialog.__davidPiMobileHost;
     if (!host) return false;
+    dialog.__davidPiContentObserver?.disconnect();
+    dialog.__davidPiContentObserver = null;
+    window.DavidPiModal.deactivate(host);
     while (host.firstChild) dialog.appendChild(host.firstChild);
     host.remove();
     dialog.hidden = false;
@@ -183,9 +194,7 @@
     dialog.__davidPiResizeHost = null;
     syncBackdrop();
     dialog.dispatchEvent(new Event('close'));
-    const returnFocus = dialog.__davidPiReturnFocus;
     dialog.__davidPiReturnFocus = null;
-    if (returnFocus && typeof returnFocus.focus === 'function') returnFocus.focus({preventScroll: true});
     return true;
   }
 

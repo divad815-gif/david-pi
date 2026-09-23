@@ -1,0 +1,131 @@
+#!/bin/bash
+# Serialize every portal writer transition with the independent backup.
+set -Eeuo pipefail
+umask 077
+
+WRITER_TRANSITION_LOCK_DIRECTORY=${DAVID_PI_WRITER_TRANSITION_LOCK_DIRECTORY:-/run/david-pi-writer-transition}
+PREPARE_MAINTENANCE_STATE=${DAVID_PI_PREPARE_MAINTENANCE_STATE:-/usr/local/sbin/david-pi-prepare-maintenance-state}
+WRITER_READINESS=${DAVID_PI_WRITER_READINESS:-/usr/local/sbin/david-pi-writer-readiness}
+DOCKER_BIN=${DAVID_PI_DOCKER_BIN:-/usr/bin/docker}
+SYSTEMCTL_BIN=${DAVID_PI_SYSTEMCTL_BIN:-/usr/bin/systemctl}
+FLOCK_BIN=${DAVID_PI_FLOCK_BIN:-/usr/bin/flock}
+STAT_BIN=${DAVID_PI_STAT_BIN:-/usr/bin/stat}
+ID_BIN=${DAVID_PI_ID_BIN:-/usr/bin/id}
+CHAT_MASTER_KEY=${DAVID_PI_CHAT_MASTER_KEY:-/srv/compose/photo-portal/secrets/chat-master.key}
+CHAT_VAPID_KEY=${DAVID_PI_CHAT_VAPID_KEY:-/srv/compose/photo-portal/secrets/chat-vapid-private.pem}
+CHAT_SECRET_UID=${DAVID_PI_CHAT_SECRET_UID:-0}
+CHAT_SECRET_GID=${DAVID_PI_CHAT_SECRET_GID:-10001}
+
+fail() {
+    printf 'david-pi-portal-lifecycle: failed: %s\n' "$*" >&2
+    return 1
+}
+
+lock_directory_identity() {
+    local path=$1
+    "$STAT_BIN" -Lc '%d:%i:%u:%g:%a:%h' -- "$path"
+}
+
+acquire_writer_transition_lock() {
+    local expected identity descriptor_identity
+    [ ! -L "$WRITER_TRANSITION_LOCK_DIRECTORY" ] &&
+        [ -d "$WRITER_TRANSITION_LOCK_DIRECTORY" ] ||
+        fail "protected writer-transition lock directory is unavailable"
+    expected="$("$ID_BIN" -u):$("$ID_BIN" -g):700:2"
+    identity=$(lock_directory_identity "$WRITER_TRANSITION_LOCK_DIRECTORY") ||
+        fail "could not inspect writer-transition lock directory"
+    case "$identity" in
+        *:"$expected") ;;
+        *) fail "writer-transition lock directory metadata drifted" ;;
+    esac
+    exec 8<"$WRITER_TRANSITION_LOCK_DIRECTORY"
+    "$FLOCK_BIN" -n 8 || fail "another writer transition is already running"
+    descriptor_identity=$("$STAT_BIN" -Lc '%d:%i:%u:%g:%a:%h' -- /proc/self/fd/8) ||
+        fail "could not inspect pinned writer-transition lock"
+    [ "$descriptor_identity" = "$identity" ] ||
+        fail "writer-transition lock path changed"
+    [ "$(lock_directory_identity "$WRITER_TRANSITION_LOCK_DIRECTORY")" = "$identity" ] ||
+        fail "writer-transition lock path changed"
+}
+
+validate_chat_secret_metadata() {
+    local secret actual expected
+    expected="$CHAT_SECRET_UID:$CHAT_SECRET_GID:440:1"
+    for secret in "$CHAT_MASTER_KEY" "$CHAT_VAPID_KEY"; do
+        [ ! -L "$secret" ] && [ -f "$secret" ] ||
+            fail "protected Chat secret metadata drifted"
+        actual=$("$STAT_BIN" -Lc '%u:%g:%a:%h' -- "$secret") ||
+            fail "could not inspect protected Chat secret"
+        [ "$actual" = "$expected" ] ||
+            fail "protected Chat secret metadata drifted"
+    done
+}
+
+rollback_incomplete_start() {
+    local original_status=$1
+    local teardown_status=0
+
+    # EXIT is already running. Ignore further termination signals so the
+    # synchronous teardown cannot be interrupted before the lifecycle lock is
+    # released by process exit.
+    trap - EXIT
+    trap '' HUP INT TERM
+    if [ "${PORTAL_STACK_STARTED:-0}" -eq 1 ] &&
+        [ "${PORTAL_START_COMPLETE:-0}" -ne 1 ]; then
+        PORTAL_STACK_STARTED=0
+        set +e
+        "$DOCKER_BIN" compose down
+        teardown_status=$?
+        set -e
+        if [ "$teardown_status" -ne 0 ]; then
+            printf 'david-pi-portal-lifecycle: failed-start teardown also failed (%s)\n' \
+                "$teardown_status" >&2
+        fi
+    fi
+    exit "$original_status"
+}
+
+start_portal() {
+    PORTAL_STACK_STARTED=0
+    PORTAL_START_COMPLETE=0
+    trap 'rollback_incomplete_start "$?"' EXIT
+    trap 'exit 129' HUP
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+
+    # Reject drift before stopping the working stack. Provisioning owns any
+    # explicit metadata repair; lifecycle never rewrites or rotates secrets.
+    validate_chat_secret_metadata
+    "$DOCKER_BIN" compose stop --timeout 45
+    "$PREPARE_MAINTENANCE_STATE"
+    # A failed or interrupted Compose up can still leave a partial stack.
+    # Arm rollback before invoking it.
+    PORTAL_STACK_STARTED=1
+    "$DOCKER_BIN" compose up -d --no-build
+    "$WRITER_READINESS" --timeout 90 --interval 2 --stable-samples 3
+    "$SYSTEMCTL_BIN" --no-block start david-pi-server-status.service
+
+    PORTAL_START_COMPLETE=1
+    trap - EXIT HUP INT TERM
+}
+
+stop_portal() {
+    "$DOCKER_BIN" compose down
+}
+
+main() {
+    [ "$("$ID_BIN" -u)" -eq 0 ] && [ "$("$ID_BIN" -g)" -eq 0 ] ||
+        fail "portal lifecycle must run as root:root"
+    [ "$#" -eq 1 ] || fail "usage: david-pi-portal-lifecycle start|stop"
+    acquire_writer_transition_lock
+    case "$1" in
+        start) start_portal ;;
+        stop) stop_portal ;;
+        *) fail "usage: david-pi-portal-lifecycle start|stop" ;;
+    esac
+}
+
+if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
+    return 0
+fi
+main "$@"

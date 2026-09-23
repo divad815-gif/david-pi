@@ -1,40 +1,64 @@
+{%- set davidpi_theme = 'dark' if request is defined and request.cookies.get('davidPiThemeV1') == 'dark' else 'light' -%}
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="{{ davidpi_theme }}">
 <head>
-  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="csrf-token" content="{{ csrf_token }}"><meta name="theme-color" content="#fffaf2">
-  <title>Notes · David-Pi</title>
-  <link rel="stylesheet" href="/static/app.css?v=14"><link rel="stylesheet" href="/static/platform.css?v=16">
+  <meta name="server-name" content="{{ server_name }}">
+  <script type="application/json" id="installation-config">{{ public_installation|tojson }}</script>
+  <script src="/static/installation.js?v=2"></script>
+  <meta name="audiobook-progress-scope" content="{{ audiobook_progress_scope }}">
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=auto">
+  <meta name="csrf-token" content="{{ csrf_token }}">
+  <meta name="notes-draft-scope" content="{{ notes_draft_scope }}">
+  <meta name="theme-color" content="#fffaf2">
+  <meta name="color-scheme" content="{{ davidpi_theme }}">
+  <script src="/static/theme-bootstrap.js?v=8"></script>
+  <title>Notes · {{ server_name }}</title>
+  <link rel="stylesheet" href="/static/app.css?v=40"><link rel="stylesheet" href="/static/platform.css?v=25"><link rel="stylesheet" href="/static/notes-files-reliability.css?v=1"><link rel="stylesheet" href="/static/david-pi-ui.css?v=16">
 </head>
 <body class="module-page notes-page">
-  <header class="module-bar"><a class="back" href="/" aria-label="Back home">&larr;</a><div><p>David-Pi</p><h1>Notes</h1></div></header>
+  <header class="module-bar"><a class="back" href="/" aria-label="Back home">&larr;</a><div><p>{{ server_name }}</p><h1>Notes</h1></div></header>
   <main class="module-shell">
     <section class="module-intro notes-intro"><div><p class="sheet-kicker">Ideas, lists, reminders</p><h2>Keep it together.</h2></div><button class="round-primary" id="newNote" type="button">+ New</button></section>
     <label class="module-search"><span aria-hidden="true">⌕</span><input id="noteSearch" type="search" placeholder="Search notes" autocomplete="off"></label>
     {% if current_person.verified %}<p class="identity-note">Viewing as {{ current_person.name }}</p>{% endif %}
     <nav class="chip-nav" id="noteViews" aria-label="Note views">
-      <button class="selected" data-view="all">All</button><button data-view="mine">Added by me</button><button data-view="pinned">Pinned</button><button data-view="archived">Archived</button><button data-view="deleted">Recently Deleted</button>
+      <button type="button" class="selected" data-view="all" aria-pressed="true">All</button><button type="button" data-view="mine" aria-pressed="false">Added by me</button><button type="button" data-view="pinned" aria-pressed="false">Pinned</button><button type="button" data-view="archived" aria-pressed="false">Archived</button><button type="button" data-view="deleted" aria-pressed="false">Recently Deleted</button>
     </nav>
-    <section class="note-grid" id="noteGrid" aria-live="polite"></section>
-    <section class="module-empty" id="notesEmpty" hidden><span aria-hidden="true">✎</span><h2>No notes yet.</h2><p>Save an idea, make a list, or leave something for each other.</p><button class="big-button" type="button" id="emptyNewNote">Create a note</button></section>
+    <section class="notes-results" id="notesPanel" aria-busy="false">
+      <p class="module-result-count" id="noteResultCount" hidden></p>
+      <section class="module-state notes-loading" id="notesLoading" aria-label="Loading notes"><span class="module-spinner" aria-hidden="true"></span><p>Loading notes…</p></section>
+      <section class="note-grid" id="noteGrid" hidden></section>
+      <button type="button" class="load-more" id="notesMore" hidden>Load more notes</button>
+      <section class="module-empty" id="notesEmpty" hidden><span aria-hidden="true">✎</span><h2>No notes yet.</h2><p>Save an idea, make a list, or leave something for each other.</p><button class="big-button" type="button" id="emptyNewNote">Create a note</button></section>
+      <section class="module-empty compact-state" id="notesNoResults" hidden><span aria-hidden="true">⌕</span><h2>No matching notes.</h2><p>Try a different word or choose another view.</p></section>
+      <section class="module-empty compact-state" id="notesError" hidden><span aria-hidden="true">!</span><h2>Notes didn’t load.</h2><p id="notesErrorText">Check the connection and try again.</p><button class="big-button" type="button" id="notesRetry">Try again</button></section>
+    </section>
   </main>
 
-  <dialog class="note-editor" id="noteEditor">
+  <dialog class="note-editor" id="noteEditor" aria-label="Note editor">
     <header><button class="editor-back" id="closeNote" type="button" aria-label="Close note">&larr;</button><span id="saveState">Saved</span><button class="more-button" id="noteMenuButton" type="button">•••</button></header>
+    <section id="noteSaveHelp" class="module-notice" hidden aria-live="polite">
+      <p id="noteSaveMessage"></p><button type="button" id="retryNoteSave">Try saving again</button>
+      <div id="noteConflictActions" hidden><details><summary>Compare saved text</summary><pre id="noteLatestText"></pre></details>
+        <button type="button" id="noteUseLatest">Use saved version</button><button type="button" id="noteKeepDraft">Save my draft instead</button></div>
+      <button type="button" id="noteCopyDraft">Copy my draft</button>
+    </section>
     <div class="note-fields">
-      <input class="note-title" id="noteTitle" maxlength="200" placeholder="Title">
+      <input class="note-title" id="noteTitle" maxlength="200" placeholder="Title" aria-label="Note title">
       <div class="note-settings"><select id="noteVisibility" aria-label="Who can see this note"><option value="shared">Shared</option><option value="private">Only me</option></select><span class="shared-note-label" id="noteOwnerLabel"></span><select id="noteType" aria-label="Note type"><option value="text">Text</option><option value="checklist">Checklist</option></select></div>
-      <textarea id="noteBody" placeholder="Start writing…"></textarea>
+      <textarea id="noteBody" maxlength="100000" placeholder="Start writing…" aria-label="Note text"></textarea>
       <div class="checklist-editor" id="checklistEditor" hidden><div id="checklistItems"></div><button id="addChecklistItem" type="button">+ Add item</button></div>
       <label class="tags-field">Tags<input id="noteTags" placeholder="Home, Ideas, Shopping"></label>
     </div>
     <div class="note-menu" id="noteMenu" hidden>
-      <button data-note-action="pin">Pin</button><button data-note-action="archive">Archive</button><button data-note-action="restore" hidden>Restore note</button><button class="danger-text" data-note-action="trash">Move to Recently Deleted</button>
+      <button type="button" data-note-action="pin">Pin</button><button type="button" data-note-action="archive">Archive</button><button type="button" data-note-action="restore" hidden>Restore note</button><button type="button" class="danger-text" data-note-action="trash">Move to Recently Deleted</button>
     </div>
   </dialog>
-  <dialog class="confirm-sheet" id="noteConfirm"><h2 id="noteConfirmTitle">Delete this note?</h2><p id="noteConfirmText"></p><div class="confirm-actions"><button id="cancelNoteConfirm" type="button">Cancel</button><button class="danger-button" id="acceptNoteConfirm" type="button">Delete</button></div></dialog>
+  <dialog class="confirm-sheet" id="noteConfirm" aria-labelledby="noteConfirmTitle" aria-describedby="noteConfirmText"><h2 id="noteConfirmTitle">Delete this note?</h2><p id="noteConfirmText"></p><div class="confirm-actions"><button id="cancelNoteConfirm" type="button">Cancel</button><button class="danger-button" id="acceptNoteConfirm" type="button">Delete</button></div></dialog>
   <div class="toast" id="platformToast" hidden role="status"></div>
-  <script src="/static/mobile-dialog-host.js?v=7" defer></script>
-  <script src="/static/notes.js?v=8" defer></script>
+  <script src="/static/david-pi-ui.js?v=15" defer></script>
+  <script src="/static/mobile-dialog-host.js?v=10" defer></script>
+  <script src="/static/note-save-session.js?v=1" defer></script>
+  <script src="/static/notes.js?v=11" defer></script>
 </body>
 </html>

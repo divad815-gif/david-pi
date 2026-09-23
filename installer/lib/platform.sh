@@ -64,12 +64,13 @@ dp_cpu_count() {
 }
 
 dp_supported_os() {
-  local id version major
+  local id version arch
   id="$(dp_os_id)"
   version="$(dp_os_version)"
-  major="${version%%.*}"
-  case "$id:$major" in
-    debian:12|debian:13|ubuntu:22|ubuntu:24) return 0 ;;
+  arch="$(dp_normalized_arch)"
+  case "$id:$version:$arch" in
+    debian:13:amd64|ubuntu:24.04:amd64) return 0 ;;
+    debian:13:arm64|raspbian:13:arm64) [[ "$(dp_hardware_model)" == *"Raspberry Pi 4"* || "$(dp_hardware_model)" == *"Raspberry Pi 5"* ]] ;;
     *) return 1 ;;
   esac
 }
@@ -104,7 +105,7 @@ dp_resource_defaults() {
 
 dp_docker_repo_os() {
   case "$(dp_os_id)" in
-    debian) echo debian ;;
+    debian|raspbian) echo debian ;;
     ubuntu) echo ubuntu ;;
     *) return 1 ;;
   esac

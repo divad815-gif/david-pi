@@ -1,0 +1,77 @@
+{%- set davidpi_theme = 'dark' if request is defined and request.cookies.get('davidPiThemeV1') == 'dark' else 'light' -%}
+<!doctype html>
+<html lang="en" data-theme="{{ davidpi_theme }}">
+<head>
+  <meta name="server-name" content="{{ server_name }}">
+  <script type="application/json" id="installation-config">{{ public_installation|tojson }}</script>
+  <script src="/static/installation.js?v=2"></script>
+  <meta name="audiobook-progress-scope" content="{{ audiobook_progress_scope }}">
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=auto">
+  <meta name="csrf-token" content="{{ csrf_token }}">
+  <meta name="theme-color" content="#fffaf2">
+  <meta name="color-scheme" content="{{ davidpi_theme }}">
+  <script src="/static/theme-bootstrap.js?v=8"></script>
+  <title>MyTube · {{ server_name }}</title>
+  <link rel="stylesheet" href="/static/app.css?v=40"><link rel="stylesheet" href="/static/platform.css?v=25">
+  <link rel="stylesheet" href="/static/mytube.css?v=3"><link rel="stylesheet" href="/static/david-pi-ui.css?v=16">
+</head>
+<body class="module-page mytube-page">
+  <header class="module-bar mytube-bar">
+    <a class="back" href="/" aria-label="Back home">&larr;</a>
+    <a class="mytube-brand" href="/mytube" aria-label="MyTube home"><span aria-hidden="true">▶</span><div><p>{{ server_name }}</p><h1>MyTube</h1></div></a>
+    <button class="round-primary compact-primary" id="openMytubeUpload" type="button">+ Add video</button>
+  </header>
+  <main class="module-shell mytube-shell">
+    <section class="mytube-hero">
+      <div><p class="sheet-kicker">Your private screen</p><h2>Everything worth keeping, ready to watch.</h2><p>Private, direct playback of compatible originals at home or away.</p></div>
+    </section>
+    <nav class="mytube-tabs" id="mytubeViews" aria-label="MyTube views">
+      <button class="selected" data-view="library" aria-pressed="true" type="button">Home</button>
+      <button data-view="continue" aria-pressed="false" type="button">Continue watching</button>
+      <button data-view="recent" aria-pressed="false" type="button">Recently added</button>
+      <button data-view="collections" aria-pressed="false" type="button">Collections</button>
+      <button data-view="mine" aria-pressed="false" type="button">My videos</button>
+      <button data-view="trash" aria-pressed="false" type="button">Trash</button>
+    </nav>
+    <section aria-labelledby="mytubeHeading" id="mytubePanel" aria-busy="true">
+      <button class="secondary-button" id="mytubeCollectionBack" type="button" hidden>← All collections</button>
+      <div class="mytube-section-title"><div><p class="sheet-kicker" id="mytubeKicker">Library</p><h2 id="mytubeHeading">Ready to watch</h2></div><div class="mytube-title-actions"><p id="mytubeCount" role="status" aria-live="polite"></p><button id="newMytubeCollection" type="button" hidden>+ New collection</button></div></div>
+      <section class="module-state" id="mytubeLoading"><span class="module-spinner" aria-hidden="true"></span><p>Loading your videos…</p></section>
+      <section class="mytube-grid" id="mytubeGrid" hidden></section>
+      <button class="load-more" type="button" id="mytubeMore" hidden>Load more</button>
+      <section class="module-empty" id="mytubeEmpty" hidden><span aria-hidden="true">▶</span><h2>Your screen is ready.</h2><p>Add a video you own or send one here from Media.</p><button class="big-button" id="emptyAddMytube" type="button">Add a video</button></section>
+      <section class="module-empty" id="mytubeError" hidden><span aria-hidden="true">!</span><h2>MyTube didn’t load.</h2><p id="mytubeErrorCopy">Your videos are unchanged. Check the connection and try again.</p><button class="big-button" id="retryMytube" type="button">Try again</button></section>
+    </section>
+  </main>
+  <dialog class="small-sheet mytube-upload-sheet" id="mytubeUploadSheet" aria-label="Add a video">
+    <button class="close" id="closeMytubeUpload" type="button" aria-label="Close add-video dialog">&times;</button>
+    <p class="sheet-kicker">Bring a video home</p><h2>Add to MyTube</h2>
+    <label class="file-drop"><input id="mytubeInput" type="file" accept="video/mp4,.mp4,.m4v"><span class="file-drop-plus" aria-hidden="true">+</span><strong>Choose an MP4 video</strong><span>H.264 video with AAC audio; large uploads resume in protected chunks</span></label>
+    <label class="text-field">Title<input id="mytubeTitle" maxlength="200" autocomplete="off"></label>
+    <label class="text-field">Who can see it?<select id="mytubeVisibility"><option value="shared">Household</option><option value="private">Only me</option></select></label>
+    <div class="mytube-upload-progress" id="mytubeUploadProgress" hidden><span id="mytubeUploadBar"></span></div>
+    <button class="big-button" id="startMytubeUpload" type="button">Upload video</button>
+    <button class="secondary-button" id="pauseMytubeUpload" type="button" hidden>Pause upload</button>
+    <p class="upload-message" id="mytubeUploadMessage" role="status" aria-live="polite"></p>
+  </dialog>
+  <dialog class="small-sheet" id="mytubeCollectionSheet" aria-label="Create a collection">
+    <button class="close" id="closeMytubeCollection" type="button" aria-label="Close collection dialog">&times;</button>
+    <p class="sheet-kicker">Organize your screen</p><h2>New collection</h2>
+    <label class="text-field">Name<input id="mytubeCollectionName" maxlength="100" autocomplete="off"></label>
+    <label class="text-field">Who can see it?<select id="mytubeCollectionVisibility"><option value="shared">Household</option><option value="private">Only me</option></select></label>
+    <button class="big-button" id="saveMytubeCollection" type="button">Create collection</button>
+    <p class="upload-message" id="mytubeCollectionMessage" role="status" aria-live="polite"></p>
+  </dialog>
+  <dialog class="small-sheet" id="mytubeAddCollectionSheet" aria-label="Add video to a collection">
+    <button class="close" id="closeMytubeAddCollection" type="button" aria-label="Close collection chooser">&times;</button>
+    <p class="sheet-kicker">Organize your screen</p><h2>Add to collection</h2>
+    <div class="mytube-collection-choices" id="mytubeCollectionChoices"></div>
+    <button class="secondary-button" id="mytubeMoreCollectionChoices" type="button" hidden>More collections</button>
+    <p class="upload-message" id="mytubeAddCollectionMessage" role="status" aria-live="polite"></p>
+  </dialog>
+  <dialog class="confirm-sheet" id="mytubeConfirm" aria-labelledby="mytubeConfirmTitle"><h2 id="mytubeConfirmTitle">Remove video?</h2><p id="mytubeConfirmCopy"></p><div class="dialog-actions"><button id="mytubeConfirmCancel" class="dialog-cancel" type="button">Keep video</button><button id="mytubeConfirmAccept" class="big-button" type="button">Remove</button></div></dialog>
+  <div class="toast" id="platformToast" hidden role="status"></div>
+  <script src="/static/david-pi-ui.js?v=15" defer></script><script src="/static/mobile-dialog-host.js?v=10" defer></script>
+  <script src="/static/sha256-stream.js?v=1" defer></script><script src="/static/mytube.js?v=4" defer></script>
+</body>
+</html>

@@ -1,0 +1,37 @@
+[Unit]
+Description=Verify the latest David-Pi snapshot in an isolated restore target
+Documentation=file:/srv/compose/photo-portal/deploy/BACKUP_RECOVERY_RUNBOOK.md
+RequiresMountsFor=/srv/backup-data /mnt/david-pi-restore
+After=srv-backup\x2ddata.mount mnt-david\x2dpi\x2drestore.mount
+ConditionPathIsMountPoint=/srv/backup-data
+ConditionPathIsMountPoint=/mnt/david-pi-restore
+OnFailure=david-pi-healthcheck-failure@restore-data.service
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+UMask=0077
+LoadCredential=manifest-key:/etc/david-pi/backup-manifest.key
+ExecStartPre=-/usr/bin/systemctl start david-pi-healthcheck-start@restore-data.service
+ExecStart=/usr/local/sbin/david_pi_restore_drill.py --latest-snapshots /srv/backup-data/snapshots --destination /mnt/david-pi-restore --signing-key-file %d/manifest-key --mode full --receipt-directory /var/lib/david-pi-recovery
+ExecStartPost=-/usr/bin/systemctl start david-pi-healthcheck-success@restore-data.service
+PrivateNetwork=true
+PrivateDevices=true
+PrivateTmp=true
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_UNIX
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+ReadOnlyPaths=/srv/backup-data /usr/local/sbin /etc
+ReadWritePaths=/mnt/david-pi-restore /var/lib/david-pi-recovery
+TimeoutStartSec=12h
+Nice=15
+IOSchedulingClass=idle

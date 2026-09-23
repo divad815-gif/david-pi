@@ -1,0 +1,16 @@
+#!/bin/bash
+# Read-only preview of the approved logical B2 retention selection. Never prunes.
+set -Eeuo pipefail
+umask 077
+
+B2_ACCOUNT_ID_FILE=${DAVID_PI_B2_RETENTION_ACCOUNT_ID_FILE:?set retention account id file}
+B2_ACCOUNT_KEY_FILE=${DAVID_PI_B2_RETENTION_ACCOUNT_KEY_FILE:?set retention account key file}
+RESTIC_REPOSITORY_FILE=${DAVID_PI_RESTIC_REPOSITORY_FILE:?set repository file}
+RESTIC_PASSWORD_FILE=${DAVID_PI_RESTIC_PASSWORD_FILE:?set password file}
+export B2_ACCOUNT_ID B2_ACCOUNT_KEY RESTIC_REPOSITORY RESTIC_PASSWORD_FILE
+B2_ACCOUNT_ID=$(tr -d '\r\n' <"$B2_ACCOUNT_ID_FILE")
+B2_ACCOUNT_KEY=$(tr -d '\r\n' <"$B2_ACCOUNT_KEY_FILE")
+RESTIC_REPOSITORY=$(tr -d '\r\n' <"$RESTIC_REPOSITORY_FILE")
+
+exec restic forget --no-lock --dry-run --host david-pi \
+    --keep-daily 30 --keep-weekly 12 --keep-monthly 12

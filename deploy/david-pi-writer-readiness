@@ -1,0 +1,191 @@
+#!/usr/bin/env python3
+"""Bounded readiness gate for every known David-Pi application writer."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import subprocess
+import sys
+import time
+from typing import Callable
+
+
+HEALTHY_WRITERS = (
+    "family-photo-portal",
+    "david-pi-maintenance",
+    "david-pi-slideshow-worker",
+    "david-pi-device-backup-worker",
+)
+RUNNING_WRITERS = ("david-pi-chat-notifier", "david-pi-audiobook-preparer")
+WRITERS = HEALTHY_WRITERS + RUNNING_WRITERS
+MAX_TIMEOUT_SECONDS = 300.0
+MAX_INTERVAL_SECONDS = 10.0
+MAX_STABLE_SAMPLES = 10
+
+
+class ReadinessError(RuntimeError):
+    """Docker state was unavailable or malformed."""
+
+
+def inspect_writers() -> dict[str, dict]:
+    try:
+        result = subprocess.run(
+            ["docker", "inspect", *WRITERS],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+            env={"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C"},
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise ReadinessError("docker inspection unavailable") from error
+    if result.returncode != 0 or len(result.stdout) > 1024 * 1024:
+        raise ReadinessError("one or more known writers are unavailable")
+    try:
+        records = json.loads(result.stdout)
+    except json.JSONDecodeError as error:
+        raise ReadinessError("docker inspection returned invalid data") from error
+    if not isinstance(records, list):
+        raise ReadinessError("docker inspection returned invalid data")
+    states: dict[str, dict] = {}
+    for record in records:
+        if not isinstance(record, dict):
+            raise ReadinessError("docker inspection returned invalid data")
+        name = str(record.get("Name") or "").lstrip("/")
+        if name not in WRITERS or name in states:
+            raise ReadinessError("docker inspection returned an unexpected writer set")
+        state = record.get("State")
+        if not isinstance(state, dict):
+            raise ReadinessError("docker inspection omitted writer state")
+        health = state.get("Health")
+        if health is not None and not isinstance(health, dict):
+            raise ReadinessError("docker inspection returned invalid health state")
+        states[name] = {
+            "container_id": record.get("Id"),
+            "running": state.get("Running") is True,
+            "paused": state.get("Paused") is True,
+            "restarting": state.get("Restarting") is True,
+            "health": (health or {}).get("Status"),
+            "started_at": state.get("StartedAt"),
+            "restart_count": record.get("RestartCount"),
+        }
+    if set(states) != set(WRITERS):
+        raise ReadinessError("docker inspection omitted a known writer")
+    return states
+
+
+def readiness_sample(states: dict[str, dict]) -> tuple[bool, tuple, str]:
+    if set(states) != set(WRITERS):
+        return False, (), "writer_set_incomplete"
+    for name in HEALTHY_WRITERS:
+        state = states[name]
+        if (
+            state.get("running") is not True
+            or state.get("paused") is True
+            or state.get("restarting") is True
+            or state.get("health") != "healthy"
+        ):
+            return False, (), f"{name}:health_not_healthy"
+    fingerprints = []
+    for name in RUNNING_WRITERS:
+        state = states[name]
+        if (
+            state.get("running") is not True
+            or state.get("paused") is True
+            or state.get("restarting") is True
+        ):
+            return False, (), f"{name}:not_running"
+        container_id = state.get("container_id")
+        started_at = state.get("started_at")
+        restart_count = state.get("restart_count")
+        if not isinstance(container_id, str) or not container_id:
+            return False, (), f"{name}:container_identity_missing"
+        if not isinstance(started_at, str) or not started_at:
+            return False, (), f"{name}:start_identity_missing"
+        if not isinstance(restart_count, int) or isinstance(restart_count, bool) or restart_count < 0:
+            return False, (), f"{name}:restart_count_invalid"
+        fingerprints.append((name, container_id, started_at, restart_count))
+    return True, tuple(fingerprints), "ready"
+
+
+def wait_for_writers(
+    *,
+    timeout: float,
+    interval: float,
+    stable_samples: int,
+    inspector: Callable[[], dict[str, dict]] = inspect_writers,
+    monotonic: Callable[[], float] = time.monotonic,
+    sleeper: Callable[[float], None] = time.sleep,
+) -> tuple[bool, str]:
+    if not (0 < timeout <= MAX_TIMEOUT_SECONDS):
+        raise ValueError("timeout is outside the allowed range")
+    if not (0 < interval <= MAX_INTERVAL_SECONDS):
+        raise ValueError("interval is outside the allowed range")
+    if not (2 <= stable_samples <= MAX_STABLE_SAMPLES):
+        raise ValueError("stable-samples is outside the allowed range")
+
+    deadline = monotonic() + timeout
+    consecutive = 0
+    prior_fingerprint: tuple | None = None
+    last_reason = "not_checked"
+    while True:
+        try:
+            states = inspector()
+            ready, fingerprint, last_reason = readiness_sample(states)
+        except ReadinessError as error:
+            ready, fingerprint, last_reason = False, (), str(error)
+        except OSError:
+            ready, fingerprint, last_reason = False, (), "writer_inspection_failed"
+        if ready:
+            if fingerprint == prior_fingerprint:
+                consecutive += 1
+            else:
+                consecutive = 1
+                prior_fingerprint = fingerprint
+            if consecutive >= stable_samples:
+                return True, "ready"
+        else:
+            consecutive = 0
+            prior_fingerprint = None
+        now = monotonic()
+        if now >= deadline:
+            return False, last_reason
+        sleeper(min(interval, max(0.0, deadline - now)))
+
+
+def _bounded_float(value: str) -> float:
+    try:
+        return float(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("must be a number") from error
+
+
+def parser() -> argparse.ArgumentParser:
+    result = argparse.ArgumentParser(description=__doc__)
+    result.add_argument("--timeout", type=_bounded_float, default=90.0)
+    result.add_argument("--interval", type=_bounded_float, default=2.0)
+    result.add_argument("--stable-samples", type=int, default=3)
+    return result
+
+
+def main(argv: list[str] | None = None) -> int:
+    arguments = parser().parse_args(argv)
+    try:
+        ready, reason = wait_for_writers(
+            timeout=arguments.timeout,
+            interval=arguments.interval,
+            stable_samples=arguments.stable_samples,
+        )
+    except ValueError as error:
+        print(f"david-pi-writer-readiness: invalid configuration: {error}", file=sys.stderr)
+        return 2
+    if not ready:
+        print(f"david-pi-writer-readiness: failed: {reason}", file=sys.stderr)
+        return 1
+    print("david-pi-writer-readiness: ready")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

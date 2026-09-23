@@ -1,0 +1,251 @@
+#!/bin/bash
+# Upload one fresh, completed, signed snapshot to the append-only encrypted B2 repository.
+set -Eeuo pipefail
+umask 077
+
+SNAPSHOTS=${DAVID_PI_SNAPSHOTS:-/srv/backup-data/snapshots}
+LATEST=${DAVID_PI_SNAPSHOT:-$SNAPSHOTS/latest}
+LAST_SUCCESS=${DAVID_PI_LOCAL_BACKUP_STATUS:-/srv/backup-data/last-success.json}
+MANIFEST_TOOL=${DAVID_PI_BACKUP_MANIFEST_TOOL:-/usr/local/sbin/david_pi_snapshot_manifest.py}
+MANIFEST_KEY_FILE=${DAVID_PI_BACKUP_MANIFEST_SIGNING_KEY_FILE:-/etc/david-pi/backup-manifest.key}
+B2_ACCOUNT_ID_FILE=${DAVID_PI_B2_ACCOUNT_ID_FILE:-/etc/david-pi/b2/account-id}
+B2_ACCOUNT_KEY_FILE=${DAVID_PI_B2_ACCOUNT_KEY_FILE:-/etc/david-pi/b2/account-key}
+RESTIC_REPOSITORY_FILE=${DAVID_PI_RESTIC_REPOSITORY_FILE:-/etc/david-pi/b2/restic-repository}
+RESTIC_PASSWORD_FILE=${DAVID_PI_RESTIC_PASSWORD_FILE:-/etc/david-pi/b2/restic-password}
+RESTIC_CACHE_DIR=${DAVID_PI_RESTIC_CACHE_DIR:-/var/cache/david-pi-restic}
+PATH_SAFETY_TOOL=${DAVID_PI_RECOVERY_PATH_TOOL:-/usr/local/sbin/david_pi_recovery_paths.py}
+LOCK_FILE=${DAVID_PI_B2_LOCK_FILE:-/run/david-pi-b2-backup/backup.lock}
+STATUS_FILE=${DAVID_PI_B2_STATUS_FILE:-/var/lib/david-pi-b2-backup/status.json}
+MAX_SNAPSHOT_AGE_SECONDS=${DAVID_PI_B2_MAX_SNAPSHOT_AGE_SECONDS:-21600}
+STARTED_AT=$(date -u +%FT%TZ)
+ATTEMPT_SNAPSHOT=unknown
+B2_COMPLETED=0
+
+write_status() {
+    local state=$1 remote_snapshot=${2:-}
+    python3 - "$STATUS_FILE" "$state" "$STARTED_AT" "$ATTEMPT_SNAPSHOT" "$remote_snapshot" <<'PY'
+import json
+import os
+from pathlib import Path
+import stat
+import sys
+import tempfile
+from datetime import datetime, timezone
+
+path, state, started_at, source_snapshot, remote_snapshot = sys.argv[1:]
+path = Path(path)
+directory = path.parent
+directory_metadata = directory.lstat()
+if (
+    directory.is_symlink()
+    or not stat.S_ISDIR(directory_metadata.st_mode)
+    or directory_metadata.st_uid != os.geteuid()
+    or stat.S_IMODE(directory_metadata.st_mode) != 0o700
+):
+    raise SystemExit("B2 status directory is unsafe")
+try:
+    existing = path.lstat()
+except FileNotFoundError:
+    existing = None
+if existing is not None and (
+    stat.S_ISLNK(existing.st_mode)
+    or not stat.S_ISREG(existing.st_mode)
+    or existing.st_uid != os.geteuid()
+):
+    raise SystemExit("B2 status path is unsafe")
+payload = {
+    "schema_version": 3,
+    "state": state,
+    "started_at": started_at,
+    "completed_at": datetime.now(timezone.utc).isoformat(),
+    "source_snapshot": source_snapshot,
+    "restic_snapshot": remote_snapshot or None,
+    "source_snapshot_confirmed": state == "uploaded_pending_restore",
+    "repository_sample_checked": state == "uploaded_pending_restore",
+    "object_lock_verified": False,
+    "offsite_restore_verified": False,
+    "pruning_enabled": False,
+}
+descriptor, temporary = tempfile.mkstemp(prefix=".status-", suffix=".tmp", dir=directory)
+try:
+    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, separators=(",", ":"), sort_keys=True)
+        handle.write("\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.chmod(temporary, 0o600)
+    os.replace(temporary, path)
+    directory_fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
+finally:
+    try:
+        os.unlink(temporary)
+    except FileNotFoundError:
+        pass
+PY
+}
+
+fail() {
+    printf '%s ERROR: %s\n' "$(date -u +%FT%TZ)" "$*" >&2
+    exit 1
+}
+
+cleanup() {
+    local exit_status=$?
+    trap - EXIT
+    if [ "$exit_status" -ne 0 ] && [ "$B2_COMPLETED" -eq 0 ]; then
+        set +e
+        write_status failed
+    fi
+    exit "$exit_status"
+}
+trap cleanup EXIT
+
+credential_path() {
+    local configured=$1
+    if [[ "$configured" = /* ]]; then
+        printf '%s\n' "$configured"
+    elif [ -n "${CREDENTIALS_DIRECTORY:-}" ]; then
+        printf '%s/%s\n' "$CREDENTIALS_DIRECTORY" "$configured"
+    else
+        fail "relative credential path requires a systemd credential directory"
+    fi
+}
+
+require_private_file() {
+    local path=$1 mode owner
+    [ ! -L "$path" ] && [ -f "$path" ] || fail "required credential file is missing or unsafe"
+    mode=$(stat -c %a "$path")
+    owner=$(stat -c %u "$path")
+    [ "$owner" = "$(id -u)" ] || fail "credential file is not owned by the service user"
+    case "$mode" in
+        400|600) ;;
+        *) fail "credential file permissions are too broad" ;;
+    esac
+    [ -s "$path" ] || fail "required credential file is empty"
+}
+
+read_one_line() {
+    python3 - "$1" <<'PY'
+import pathlib
+import sys
+lines = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8").splitlines()
+if len(lines) != 1 or not lines[0].strip():
+    raise SystemExit(1)
+print(lines[0].strip())
+PY
+}
+
+command -v restic >/dev/null || fail "restic is not installed"
+command -v python3 >/dev/null || fail "python3 is not installed"
+[ -f "$PATH_SAFETY_TOOL" ] && [ ! -L "$PATH_SAFETY_TOOL" ] ||
+    fail "recovery path safety tool is missing or unsafe"
+case "$MAX_SNAPSHOT_AGE_SECONDS" in
+    ''|*[!0-9]*) fail "snapshot freshness limit is invalid" ;;
+esac
+[ "$MAX_SNAPSHOT_AGE_SECONDS" -ge 600 ] && [ "$MAX_SNAPSHOT_AGE_SECONDS" -le 86400 ] ||
+    fail "snapshot freshness limit is outside the safe range"
+
+MANIFEST_KEY_FILE=$(credential_path "$MANIFEST_KEY_FILE")
+B2_ACCOUNT_ID_FILE=$(credential_path "$B2_ACCOUNT_ID_FILE")
+B2_ACCOUNT_KEY_FILE=$(credential_path "$B2_ACCOUNT_KEY_FILE")
+RESTIC_REPOSITORY_FILE=$(credential_path "$RESTIC_REPOSITORY_FILE")
+RESTIC_PASSWORD_FILE=$(credential_path "$RESTIC_PASSWORD_FILE")
+for file in "$MANIFEST_KEY_FILE" "$B2_ACCOUNT_ID_FILE" "$B2_ACCOUNT_KEY_FILE" \
+            "$RESTIC_REPOSITORY_FILE" "$RESTIC_PASSWORD_FILE"; do
+    require_private_file "$file"
+done
+
+LOCK_DIRECTORY=$(dirname "$LOCK_FILE")
+STATUS_DIRECTORY=$(dirname "$STATUS_FILE")
+for directory in "$LOCK_DIRECTORY" "$STATUS_DIRECTORY" "$RESTIC_CACHE_DIR"; do
+    [ ! -L "$directory" ] && [ -d "$directory" ] || fail "private runtime/state directory is unavailable"
+    [ "$(stat -c %u "$directory")" = "$(id -u)" ] || fail "private runtime/state directory owner is unsafe"
+    [ "$(stat -c %a "$directory")" = 700 ] || fail "private runtime/state directory mode is unsafe"
+done
+if [ -e "$STATUS_FILE" ] || [ -L "$STATUS_FILE" ]; then
+    [ ! -L "$STATUS_FILE" ] && [ -f "$STATUS_FILE" ] || fail "B2 status path is unsafe"
+    [ "$(stat -c %u "$STATUS_FILE")" = "$(id -u)" ] || fail "B2 status owner is unsafe"
+    case "$(stat -c %a "$STATUS_FILE")" in
+        400|600) ;;
+        *) fail "B2 status permissions are unsafe" ;;
+    esac
+fi
+if [ -e "$LOCK_FILE" ] || [ -L "$LOCK_FILE" ]; then
+    [ ! -L "$LOCK_FILE" ] && [ -f "$LOCK_FILE" ] || fail "B2 lock path is unsafe"
+fi
+exec 9>"$LOCK_FILE"
+flock -n 9 || fail "another B2 backup is already running"
+
+LATEST_FACTS=$(python3 "$PATH_SAFETY_TOOL" resolve-latest \
+    --snapshots "$SNAPSHOTS" --latest "$LATEST") || fail "latest snapshot is unsafe"
+SNAPSHOT=${LATEST_FACTS%%$'\n'*}
+ATTEMPT_SNAPSHOT=${LATEST_FACTS##*$'\n'}
+[ -f "$SNAPSHOT/MANIFEST.json" ] || fail "snapshot manifest is missing"
+[ ! -L "$LAST_SUCCESS" ] && [ -f "$LAST_SUCCESS" ] || fail "local backup status is missing or unsafe"
+status_mode=$(stat -c %a "$LAST_SUCCESS")
+status_owner=$(stat -c %u "$LAST_SUCCESS")
+[ "$status_owner" = "$(id -u)" ] || fail "local backup status has an unsafe owner"
+case "$status_mode" in
+    400|600) ;;
+    *) fail "local backup status permissions are too broad" ;;
+esac
+
+python3 "$MANIFEST_TOOL" verify \
+    --snapshot "$SNAPSHOT" \
+    --manifest "$SNAPSHOT/MANIFEST.json" \
+    --signing-key-file "$MANIFEST_KEY_FILE" >/dev/null
+python3 - "$LAST_SUCCESS" "$SNAPSHOT/MANIFEST.json" "$ATTEMPT_SNAPSHOT" "$MAX_SNAPSHOT_AGE_SECONDS" <<'PY'
+import json
+import sys
+from datetime import datetime, timezone
+
+status_path, manifest_path, snapshot_id, max_age = sys.argv[1:]
+status = json.load(open(status_path, encoding="utf-8"))
+manifest = json.load(open(manifest_path, encoding="utf-8"))
+if (
+    status.get("schema_version") != 3
+    or status.get("state") != "healthy"
+    or status.get("snapshot") != snapshot_id
+    or status.get("writers_quiesced") is not True
+    or status.get("pruning_enabled") is not False
+    or manifest.get("snapshot_id") != snapshot_id
+):
+    raise SystemExit("latest snapshot does not match the completed local backup")
+if status.get("manifest_sha256") != manifest.get("integrity", {}).get("payload_sha256"):
+    raise SystemExit("local backup status and signed manifest disagree")
+if status.get("database_count") != len(manifest.get("databases", [])):
+    raise SystemExit("local backup database count and signed manifest disagree")
+quiescence = status.get("writer_quiescence_seconds")
+if type(quiescence) is not int or quiescence < 0 or quiescence > 1800:
+    raise SystemExit("local backup exceeded the approved quiescence window")
+completed = datetime.fromisoformat(str(status.get("completed_at", "")).replace("Z", "+00:00"))
+now = datetime.now(timezone.utc)
+age = (now - completed.astimezone(timezone.utc)).total_seconds()
+if age < -300 or age > int(max_age):
+    raise SystemExit("completed local snapshot is outside the freshness window")
+PY
+
+export B2_ACCOUNT_ID B2_ACCOUNT_KEY RESTIC_REPOSITORY RESTIC_PASSWORD_FILE RESTIC_CACHE_DIR
+B2_ACCOUNT_ID=$(read_one_line "$B2_ACCOUNT_ID_FILE") || fail "B2 account id file is invalid"
+B2_ACCOUNT_KEY=$(read_one_line "$B2_ACCOUNT_KEY_FILE") || fail "B2 account key file is invalid"
+RESTIC_REPOSITORY=$(read_one_line "$RESTIC_REPOSITORY_FILE") || fail "repository file is invalid"
+case "$RESTIC_REPOSITORY" in
+    b2:*) ;;
+    *) fail "repository must use the Backblaze B2 backend" ;;
+esac
+
+restic backup --quiet --no-lock --one-file-system --host david-pi \
+    --tag daily --tag "source-$ATTEMPT_SNAPSHOT" "$SNAPSHOT"
+restic check --quiet --no-lock --read-data-subset=1/100
+RESTIC_SNAPSHOT=$(restic snapshots --no-lock --json --host david-pi --tag "source-$ATTEMPT_SNAPSHOT" |
+    python3 -c 'import json,sys; rows=json.load(sys.stdin); print(rows[-1]["short_id"] if rows else "")')
+[ -n "$RESTIC_SNAPSHOT" ] || fail "uploaded restic snapshot could not be confirmed"
+
+write_status uploaded_pending_restore "$RESTIC_SNAPSHOT"
+B2_COMPLETED=1
+printf '%s uploaded signed snapshot %s as %s; off-site restore remains pending\n' \
+    "$(date -u +%FT%TZ)" "$ATTEMPT_SNAPSHOT" "$RESTIC_SNAPSHOT"

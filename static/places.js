@@ -1,13 +1,48 @@
 const csrf = document.querySelector('meta[name="csrf-token"]').content;
 let cuisines = JSON.parse(document.body.dataset.cuisines || '[]');
-const state = {tab:'want_to_go', items:[], editId:null, reviewId:null, deleteId:null, margMonth:null, margaritas:[], placePhotos:[], placePhotoIndex:0};
+const state = {tab:'want_to_go', items:[], editItem:null, reviewItem:null, deleteItem:null, margItem:null, margaritas:[], placePhotos:[], placePhotoIndex:0, placePhotoTrigger:null};
 const $ = (selector) => document.querySelector(selector);
+const placesPanel = window.AsyncPanel.create({
+  root:'#restaurantResults', loading:'#restaurantsLoading', content:'#restaurantList',
+  empty:'#placesEmpty', noResults:'#placesNoResults', error:'#placesError',
+});
+const margaritasPanel = window.AsyncPanel.create({
+  root:'#margaritaResults', loading:'#margaritasLoading', content:'#margGrid', error:'#margaritasError',
+});
+const placesAnnouncer = window.DavidPiAnnouncer.create();
+let restaurantGeneration = 0;
+let margaritaGeneration = 0;
+let restaurantController = null;
+let margaritaController = null;
+let margaritaCalendar = 'legacy';
+let margaritaConflict = null;
+function calendarUrl(path, calendar = margaritaCalendar) {
+  const url = new URL(path, location.origin);
+  if (calendar !== 'legacy') url.searchParams.set('year', calendar);
+  return `${url.pathname}${url.search}`;
+}
+function updateCalendarChoices(years = []) {
+  const current = new Date().getFullYear();
+  const choices = new Set([current - 1, current, current + 1, ...years]);
+  if (margaritaCalendar !== 'legacy') choices.add(Number(margaritaCalendar));
+  $('#margCalendar').replaceChildren(new Option('Year unconfirmed', 'legacy'),
+    ...[...choices].sort((a, b) => b - a).map(year => new Option(String(year), String(year))));
+  $('#margCalendar').value = margaritaCalendar;
+  $('#margAssignYear').hidden = margaritaCalendar !== 'legacy';
+  $('#margPreviousYear').disabled = margaritaCalendar === '1900';
+  $('#margNextYear').disabled = margaritaCalendar === '2200';
+}
 
 async function api(url, options={}) {
   options.headers = {...options.headers, 'X-CSRF-Token':csrf};
   const response = await fetch(url, options);
   const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data.error || 'Something went wrong.');
+  if (!response.ok) {
+    const error = new Error(data.error || 'Something went wrong.');
+    error.status = response.status;
+    error.data = data;
+    throw error;
+  }
   return data;
 }
 function toast(text) {
@@ -44,18 +79,34 @@ function setBusy(button, busy, label) {
 }
 
 async function loadRestaurants() {
+  const generation = ++restaurantGeneration;
+  restaurantController?.abort();
+  restaurantController = new AbortController();
   const list = $('#restaurantList');
-  const query = $('#restaurantSearch').value;
+  const query = $('#restaurantSearch').value.trim();
   const sort = $('#restaurantSort').value;
+  placesPanel.begin(generation);
+  $('#restaurantResultCount').hidden = true;
   try {
-    const data = await api(`/api/places/restaurants?${new URLSearchParams({view:state.tab, q:query, sort})}`);
+    const data = await api(`/api/places/restaurants?${new URLSearchParams({view:state.tab, q:query, sort})}`, {signal:restaurantController.signal});
+    if (generation !== restaurantGeneration) return;
     updateCuisineOptions(data.cuisines);
-    state.items = data.restaurants;
+    state.items = Array.isArray(data.restaurants) ? data.restaurants : [];
     list.replaceChildren(...state.items.map(restaurantCard));
-    $('#placesEmpty').hidden = state.items.length !== 0;
-    $('#placesEmpty h2').textContent = state.tab === 'reviewed' ? 'No reviews yet.' : 'Start a restaurant list.';
-    $('#placesEmpty p').textContent = state.tab === 'reviewed' ? 'Check off a place after you go and leave a review.' : 'Add somewhere you both want to try.';
-  } catch (error) { list.textContent = error.message; }
+    $('#placesEmpty h2').textContent = state.tab === 'trash' ? 'Trash is empty.' : (state.tab === 'reviewed' ? 'No reviews yet.' : 'Start a restaurant list.');
+    $('#placesEmpty p').textContent = state.tab === 'trash' ? 'Restaurants you remove remain recoverable for at least 30 days.' : (state.tab === 'reviewed' ? 'Check off a place after you go and leave a review.' : 'Add somewhere you both want to try.');
+    $('#emptyAddRestaurant').hidden = state.tab === 'trash';
+    const count = Number.isInteger(data.count) ? data.count : state.items.length;
+    $('#restaurantResultCount').textContent = `${count} ${count === 1 ? 'restaurant' : 'restaurants'}`;
+    $('#restaurantResultCount').hidden = false;
+    placesPanel.success(generation, {empty:count === 0 && !query, noResults:count === 0 && Boolean(query)});
+    placesAnnouncer.polite(count ? `${count} restaurants loaded.` : (query ? 'No matching restaurants.' : $('#placesEmpty h2').textContent));
+  } catch (error) {
+    if (error.name === 'AbortError' || generation !== restaurantGeneration) return;
+    $('#placesErrorText').textContent = error.message;
+    placesPanel.transition('error');
+    placesAnnouncer.alert(`Restaurants could not be loaded. ${error.message}`);
+  }
 }
 function restaurantCard(item) {
   const article = document.createElement('article'); article.className = 'restaurant-card';
@@ -66,14 +117,14 @@ function restaurantCard(item) {
       image.tabIndex = 0;
       image.setAttribute('role', 'button');
       image.setAttribute('aria-label', `Open ${item.name} photo ${index + 1}`);
-      image.addEventListener('click', () => openPlacePhotos(item, index));
-      image.addEventListener('keydown', (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openPlacePhotos(item, index); } });
+      image.addEventListener('click', () => openPlacePhotos(item, index, image));
+      image.addEventListener('keydown', (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openPlacePhotos(item, index, image); } });
       gallery.append(image);
     });
     article.append(gallery);
   }
   const top = document.createElement('div'); top.className = 'restaurant-card-top';
-  if (item.status === 'want_to_go') {
+  if (item.status === 'want_to_go' && item.can_review) {
     const check = Object.assign(document.createElement('button'), {className:'went-check', textContent:'✓'});
     check.setAttribute('aria-label', `We went to ${item.name}`); check.title = 'We went here';
     check.addEventListener('click', () => openReview(item));
@@ -93,24 +144,42 @@ function restaurantCard(item) {
   }
   top.append(copy); article.append(top);
   const actions = document.createElement('div'); actions.className = 'restaurant-actions';
-  const edit = Object.assign(document.createElement('button'), {textContent:'Edit'});
-  edit.addEventListener('click', () => openRestaurant(item));
-  if (item.status === 'reviewed') {
+  if (item.deleted_at && item.can_restore) {
+    const restore = Object.assign(document.createElement('button'), {textContent:'Restore'});
+    restore.addEventListener('click', async () => {
+      restore.disabled = true;
+      try { await api(`/api/places/restaurants/${item.id}/restore`, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({version:item.version})}); toast(`${item.name} restored.`); await loadRestaurants(); }
+      catch (error) { toast(error.message); restore.disabled = false; }
+    });
+    actions.append(restore);
+  } else if (item.can_edit) {
+    const edit = Object.assign(document.createElement('button'), {textContent:'Edit'});
+    edit.addEventListener('click', () => openRestaurant(item)); actions.append(edit);
+  }
+  if (!item.deleted_at && item.status === 'reviewed' && item.can_review) {
     const rereview = Object.assign(document.createElement('button'), {textContent:'Update review'});
     rereview.addEventListener('click', () => openReview(item)); actions.append(rereview);
   }
-  const remove = Object.assign(document.createElement('button'), {className:'danger-text', textContent:'Remove'});
-  remove.addEventListener('click', () => { state.deleteId = item.id; $('#placeConfirm').showModal(); });
-  actions.append(edit, remove); article.append(actions); return article;
+  if (!item.deleted_at && item.can_edit) {
+    const remove = Object.assign(document.createElement('button'), {className:'danger-text', textContent:'Move to trash'});
+    remove.addEventListener('click', () => { state.deleteItem = item; $('#placeConfirm').showModal(); });
+    actions.append(remove);
+  } else if (item.legacy_read_only) {
+    const notice = document.createElement('small'); notice.textContent = 'Shared legacy restaurant · read-only until ownership is reviewed'; actions.append(notice);
+  }
+  article.append(actions); return article;
 }
 
 function openRestaurant(item=null) {
-  state.editId = item?.id || null;
+  state.editItem = item;
   $('#restaurantSheetTitle').textContent = item ? 'Edit restaurant' : 'Add a restaurant';
   $('#saveRestaurant').textContent = item ? 'Save changes' : 'Add to our list';
   $('#restaurantName').value = item?.name || ''; $('#restaurantNotes').value = item?.notes || '';
-  createCuisineChips($('.editor-cuisines'), item?.cuisines || []);
-  $('#restaurantCustomCuisine').value = '';
+  const knownCuisines = new Set(cuisines.map((name) => name.toLocaleLowerCase()));
+  const selected = (item?.cuisines || []).filter((name) => knownCuisines.has(name.toLocaleLowerCase()));
+  const custom = (item?.cuisines || []).filter((name) => !knownCuisines.has(name.toLocaleLowerCase()));
+  createCuisineChips($('.editor-cuisines'), selected);
+  $('#restaurantCustomCuisine').value = custom.join(', ');
   $('#restaurantImage').value = '';
   clearSelectedPhotoPreviews();
   const editor = $('#restaurantPhotoEditor'); editor.replaceChildren();
@@ -137,20 +206,46 @@ function renderSelectedPhotoPreviews() {
   $('#restaurantNewPhotoSelection').hidden = false;
   $('#restaurantImageLabel').textContent = 'Change selected photos';
 }
-function openPlacePhotos(item, index=0) {
-  state.placePhotos = item.photos || [];
+function openPhotoViewer(photos, index=0, trigger=document.activeElement) {
+  if (!photos.length) return;
+  state.placePhotos = photos;
   state.placePhotoIndex = Math.max(0, Math.min(index, state.placePhotos.length - 1));
+  state.placePhotoTrigger = trigger;
   renderPlacePhoto();
   $('#placePhotoViewer').showModal();
+  $('#closePlacePhotos').focus();
+}
+function openPlacePhotos(item, index=0, trigger=document.activeElement) {
+  const photos = (item.photos || []).map((photo, photoIndex) => ({
+    src:`${photo.url}?v=${encodeURIComponent(item.updated_at || '')}`,
+    alt:`${item.name}, photo ${photoIndex + 1} of ${item.photos.length}`,
+    caption:item.photos.length > 1 ? `${item.name} · Photo ${photoIndex + 1} of ${item.photos.length}` : item.name,
+  }));
+  openPhotoViewer(photos, index, trigger);
+}
+function margaritaPhotoCaption(item) {
+  return item.name?.trim() ? `${item.month_name} · ${item.name.trim()}` : `${item.month_name} · Chili's Margarita of the Month`;
+}
+function openMargaritaPhoto(item, trigger=document.activeElement) {
+  if (!item.image_url) return;
+  const caption = margaritaPhotoCaption(item);
+  openPhotoViewer([{
+    src:`${item.image_url}${item.image_url.includes('?') ? '&' : '?'}v=${encodeURIComponent(item.updated_at || '')}`,
+    alt:`Photo of ${caption}`,
+    caption,
+  }], 0, trigger);
 }
 function renderPlacePhoto() {
   const photo = state.placePhotos[state.placePhotoIndex];
   if (!photo) return;
-  $('#placePhotoImage').src = photo.url;
-  $('#placePhotoImage').alt = `Restaurant photo ${state.placePhotoIndex + 1} of ${state.placePhotos.length}`;
+  $('#placePhotoImage').src = photo.src;
+  $('#placePhotoImage').alt = photo.alt;
+  $('#placePhotoCaption').textContent = photo.caption;
   $('#placePhotoCount').textContent = `${state.placePhotoIndex + 1} of ${state.placePhotos.length}`;
-  $('#previousPlacePhoto').disabled = state.placePhotos.length < 2;
-  $('#nextPlacePhoto').disabled = state.placePhotos.length < 2;
+  const hasMultiple = state.placePhotos.length > 1;
+  $('#previousPlacePhoto').hidden = !hasMultiple;
+  $('#nextPlacePhoto').hidden = !hasMultiple;
+  $('#placePhotoCount').hidden = !hasMultiple;
 }
 function movePlacePhoto(direction) {
   if (state.placePhotos.length < 2) return;
@@ -167,16 +262,17 @@ async function saveRestaurant() {
     setBusy(button, false); return;
   }
   const form = new FormData(); form.append('name',$('#restaurantName').value); form.append('notes',$('#restaurantNotes').value);
+  if (state.editItem) form.append('version', state.editItem.version);
   [...selectedCuisines($('.editor-cuisines')), ...custom].forEach((name)=>form.append('cuisines',name));
   editorRemovedPhotos().forEach((id)=>form.append('remove_photo_ids',id));
   files.forEach((file)=>form.append('images',file));
   try {
-    await api(state.editId ? `/api/places/restaurants/${state.editId}` : '/api/places/restaurants', {
-      method:state.editId ? 'PUT' : 'POST', body:form
+    await api(state.editItem ? `/api/places/restaurants/${state.editItem.id}` : '/api/places/restaurants', {
+      method:state.editItem ? 'PUT' : 'POST', body:form
     });
     $('#restaurantSheet').close(); clearSelectedPhotoPreviews();
     const uploadNotice = files.length ? `${files.length} ${files.length === 1 ? 'photo' : 'photos'} uploaded. ` : '';
-    toast(`${uploadNotice}${state.editId ? 'Restaurant updated.' : 'Restaurant added.'}`); await loadRestaurants();
+    toast(`${uploadNotice}${state.editItem ? 'Restaurant updated.' : 'Restaurant added.'}`); await loadRestaurants();
   } catch (error) { $('#restaurantMessage').textContent = error.message; }
   finally { setBusy(button, false); }
 }
@@ -184,7 +280,7 @@ function editorRemovedPhotos() {
   return [...$('#restaurantPhotoEditor').querySelectorAll('input[data-remove-photo]:checked')].map((input)=>input.value);
 }
 function openReview(item) {
-  state.reviewId = item.id; $('#reviewRestaurantName').textContent = item.name;
+  state.reviewItem = item; $('#reviewRestaurantName').textContent = item.name;
   $('#reviewRating').value = item.rating || 4; updateRating($('#reviewRating'), $('#reviewStars'));
   $('#reviewDate').value = item.visited_at || new Date().toISOString().slice(0,10);
   $('#reviewText').value = item.review || ''; $('#reviewMessage').textContent = ''; $('#reviewSheet').showModal();
@@ -193,7 +289,7 @@ function updateRating(input, output) { output.textContent = stars(Number(input.v
 async function saveReview() {
   const button = $('#saveReview'); setBusy(button, true, 'Saving…');
   try {
-    await api(`/api/places/restaurants/${state.reviewId}/review`, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({rating:Number($('#reviewRating').value), review:$('#reviewText').value, visited_at:$('#reviewDate').value})});
+    await api(`/api/places/restaurants/${state.reviewItem.id}/review`, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({rating:Number($('#reviewRating').value), review:$('#reviewText').value, visited_at:$('#reviewDate').value, version:state.reviewItem.version})});
     $('#reviewSheet').close(); toast('Review saved.'); await loadRestaurants();
   } catch (error) { $('#reviewMessage').textContent = error.message; }
   finally { setBusy(button, false); }
@@ -213,50 +309,138 @@ async function chooseRestaurant() {
 }
 
 async function loadMargaritas() {
-  const data = await api('/api/places/margaritas'); state.margaritas = data.margaritas;
-  $('#margGrid').replaceChildren(...data.margaritas.map((item) => {
-    const button = document.createElement('button'); button.className = 'marg-card';
-    if (item.image_url) { const img = Object.assign(document.createElement('img'), {src:`${item.image_url}?v=${encodeURIComponent(item.updated_at || '')}`, alt:'', loading:'lazy'}); button.append(img); }
-    else { const art = Object.assign(document.createElement('span'), {className:'marg-fallback', textContent:'⌁'}); button.append(art); }
-    const copy = document.createElement('span'); copy.className = 'marg-copy';
-    const month = document.createElement('strong'); month.textContent = item.month_name;
-    const name = document.createElement('b'); name.textContent = item.name || 'Add this month';
-    const rating = document.createElement('small'); rating.textContent = stars(item.rating);
-    copy.append(month, name, rating); button.append(copy); button.addEventListener('click', () => openMarg(item)); return button;
-  }));
+  const generation = ++margaritaGeneration;
+  margaritaController?.abort();
+  margaritaController = new AbortController();
+  margaritasPanel.begin(generation);
+  $('#margaritaMigrationNotice').hidden = true;
+  try {
+    const data = await api(calendarUrl('/api/places/margaritas'), {signal:margaritaController.signal});
+    if (generation !== margaritaGeneration) return;
+    updateCalendarChoices(data.years || []);
+    state.margaritas = Array.isArray(data.margaritas) ? data.margaritas : [];
+    $('#margaritaMigrationNotice').hidden = !state.margaritas.some((item) => item.migration_conflict);
+    $('#margGrid').replaceChildren(...state.margaritas.map((item) => {
+      const card = document.createElement('article'); card.className = 'marg-card';
+      if (item.image_url) {
+        const photoButton = document.createElement('button'); photoButton.type = 'button'; photoButton.className = 'marg-photo-open';
+        photoButton.setAttribute('aria-label', `Open photo: ${margaritaPhotoCaption(item)}`);
+        const img = Object.assign(document.createElement('img'), {src:`${item.image_url}${item.image_url.includes('?') ? '&' : '?'}v=${encodeURIComponent(item.updated_at || '')}`, alt:'', loading:'lazy'});
+        photoButton.append(img); photoButton.addEventListener('click', () => openMargaritaPhoto(item, photoButton)); card.append(photoButton);
+      } else {
+        const art = Object.assign(document.createElement('span'), {className:'marg-fallback', textContent:'⌁'}); art.setAttribute('aria-hidden', 'true'); card.append(art);
+      }
+      const copy = document.createElement('span'); copy.className = 'marg-copy';
+      const month = document.createElement('strong'); month.textContent = item.month_name;
+      const name = document.createElement('b');
+      name.textContent = item.migration_conflict ? 'Older saves need review' : (item.name || 'Add this month');
+      const rating = document.createElement('small'); rating.textContent = stars(item.rating);
+      copy.append(month, name, rating); card.append(copy);
+      const actions = document.createElement('span'); actions.className = 'marg-actions';
+      const edit = document.createElement('button'); edit.type = 'button'; edit.className = 'marg-edit'; edit.textContent = 'Edit';
+      if (item.migration_conflict) {
+        edit.disabled = true; edit.textContent = 'Review needed';
+        edit.setAttribute('aria-label', `${item.month_name} margarita needs household review`);
+      } else {
+        edit.setAttribute('aria-label', `Edit ${item.month_name} margarita`);
+        edit.addEventListener('click', () => openMarg(item));
+      }
+      actions.append(edit); card.append(actions); return card;
+    }));
+    margaritasPanel.success(generation);
+    placesAnnouncer.polite('Margarita calendar loaded.');
+    return true;
+  } catch (error) {
+    if (error.name === 'AbortError' || generation !== margaritaGeneration) return;
+    $('#margaritasErrorText').textContent = error.message;
+    margaritasPanel.transition('error');
+    placesAnnouncer.alert(`Margaritas could not be loaded. ${error.message}`);
+    return false;
+  }
 }
 function openMarg(item) {
-  state.margMonth = item.month; $('#margMonth').textContent = item.month_name; $('#margName').value = item.name || '';
+  margaritaConflict = null; $('#margConflict').hidden = true;
+  state.margItem = item; $('#margMonth').textContent = `${item.month_name}${item.calendar && item.calendar !== 'legacy' ? ` ${item.calendar}` : ' · Existing calendar'}`; $('#margName').value = item.name || '';
   $('#margRating').value = item.rating || 0; updateRating($('#margRating'), $('#margStars'));
   $('#margReview').value = item.review || ''; $('#margImage').value = ''; $('#removeMargImage').checked = false;
-  $('#removePhotoWrap').hidden = !item.has_image; $('#margMessage').textContent = ''; $('#margSheet').showModal();
+  $('#removePhotoWrap').hidden = !item.has_image; $('#margMessage').textContent = '';
+  if (!$('#margSheet').open) $('#margSheet').showModal();
 }
 async function saveMarg() {
   const button = $('#saveMarg'); setBusy(button, true, 'Saving…');
   const form = new FormData(); form.append('name', $('#margName').value); form.append('rating', $('#margRating').value === '0' ? '' : $('#margRating').value);
+  form.append('version', state.margItem.version);
   form.append('review', $('#margReview').value); form.append('remove_image', $('#removeMargImage').checked ? 'true' : 'false');
   if ($('#margImage').files[0]) form.append('image', $('#margImage').files[0]);
   try {
-    await api(`/api/places/margaritas/${state.margMonth}`, {method:'PUT', body:form});
+    await api(calendarUrl(`/api/places/margaritas/${state.margItem.month}`, state.margItem.calendar || 'legacy'), {method:'PUT', body:form});
     $('#margSheet').close(); toast('Margarita saved.'); await loadMargaritas();
-  } catch (error) { $('#margMessage').textContent = error.message; }
+  } catch (error) {
+    if (error.status === 409 && error.data?.conflict) {
+      const month = state.margItem.month;
+      const reloaded = await loadMargaritas();
+      if (!reloaded) {
+        $('#margMessage').textContent = 'This month changed elsewhere, but the current calendar could not be reloaded. Close this editor and try again when connected.';
+        return;
+      }
+      if (error.data?.review_required) {
+        $('#margSheet').close();
+        toast('This month needs household review before editing.');
+      } else {
+        margaritaConflict = state.margaritas.find((item) => item.month === month);
+        $('#margMessage').textContent = 'This month changed elsewhere. Your draft and selected photo are still here.';
+        $('#margConflictCopy').textContent = `Saved version: ${margaritaConflict?.name || 'No name'} — ${margaritaConflict?.review || 'No notes'}`;
+        $('#margConflict').hidden = !margaritaConflict;
+      }
+    } else {
+      $('#margMessage').textContent = error.message;
+    }
+  }
   finally { setBusy(button, false); }
 }
 
-$('#placesTabs').addEventListener('click', async (event) => {
-  const button = event.target.closest('button[data-tab]'); if (!button) return;
+$('#margCalendar').addEventListener('change', () => { margaritaCalendar = $('#margCalendar').value; loadMargaritas(); });
+for (const [selector, direction] of [['#margPreviousYear', -1], ['#margNextYear', 1]]) {
+  $(selector).addEventListener('click', () => {
+    const year = margaritaCalendar === 'legacy' ? new Date().getFullYear() : Number(margaritaCalendar) + direction;
+    margaritaCalendar = String(Math.max(1900, Math.min(2200, year)));
+    updateCalendarChoices(); loadMargaritas();
+  });
+}
+$('#margAssignYearValue').value = String(new Date().getFullYear());
+$('#margAssignYearSave').addEventListener('click', async () => {
+  const button = $('#margAssignYearSave'); button.disabled = true;
+  try {
+    const result = await api('/api/places/margaritas/assign-year', {method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({year: $('#margAssignYearValue').value, versions: Object.fromEntries(state.margaritas.map(item => [item.month, item.version]))})});
+    margaritaCalendar = String(result.year); updateCalendarChoices(); await loadMargaritas(); toast('Calendar copied. The original is preserved.');
+  } catch (error) { $('#margAssignMessage').textContent = error.message; }
+  finally { button.disabled = false; }
+});
+$('#margUseSaved').addEventListener('click', () => { if (margaritaConflict) openMarg(margaritaConflict); });
+$('#margKeepDraft').addEventListener('click', () => {
+  if (!margaritaConflict) return;
+  state.margItem = margaritaConflict; margaritaConflict = null; $('#margConflict').hidden = true; saveMarg();
+});
+window.DavidPiFilterGroup.create('#placesTabs', {selector:'button[data-tab]', onChange:async (button) => {
   state.tab = button.dataset.tab; [...$('#placesTabs').children].forEach((node) => node.classList.toggle('selected', node === button));
-  const restaurants = ['want_to_go','reviewed'].includes(state.tab);
+  const restaurants = ['want_to_go','reviewed','trash'].includes(state.tab);
   $('#restaurantPanel').hidden = !restaurants; $('#chooserPanel').hidden = state.tab !== 'choose'; $('#margaritaPanel').hidden = state.tab !== 'margaritas';
   if (restaurants) { $('#restaurantSort').hidden = state.tab !== 'reviewed'; await loadRestaurants(); }
   if (state.tab === 'margaritas') await loadMargaritas();
-});
+}});
 $('#openRestaurant').addEventListener('click', () => openRestaurant());
 $('#emptyAddRestaurant').addEventListener('click', () => openRestaurant());
 $('#closeRestaurant').addEventListener('click', () => $('#restaurantSheet').close());
 $('#saveRestaurant').addEventListener('click', saveRestaurant);
 $('#restaurantImage').addEventListener('change', renderSelectedPhotoPreviews);
 $('#closePlacePhotos').addEventListener('click', () => $('#placePhotoViewer').close());
+$('#placePhotoViewer').addEventListener('close', () => {
+  const trigger = state.placePhotoTrigger;
+  state.placePhotoTrigger = null;
+  $('#placePhotoImage').removeAttribute('src');
+  if (trigger?.isConnected) trigger.focus();
+});
 $('#previousPlacePhoto').addEventListener('click', () => movePlacePhoto(-1));
 $('#nextPlacePhoto').addEventListener('click', () => movePlacePhoto(1));
 $('#placePhotoViewer').addEventListener('keydown', (event) => {
@@ -279,9 +463,11 @@ $('#saveMarg').addEventListener('click', saveMarg);
 $('#chooseRestaurant').addEventListener('click', chooseRestaurant);
 $('#restaurantSort').addEventListener('change', loadRestaurants);
 let searchTimer; $('#restaurantSearch').addEventListener('input', () => { clearTimeout(searchTimer); searchTimer = setTimeout(loadRestaurants, 220); });
+$('#placesRetry').addEventListener('click', loadRestaurants);
+$('#margaritasRetry').addEventListener('click', loadMargaritas);
 $('#cancelPlaceDelete').addEventListener('click', () => $('#placeConfirm').close());
 $('#acceptPlaceDelete').addEventListener('click', async () => {
-  try { await api(`/api/places/restaurants/${state.deleteId}`, {method:'DELETE'}); $('#placeConfirm').close(); toast('Restaurant removed.'); await loadRestaurants(); }
+  try { await api(`/api/places/restaurants/${state.deleteItem.id}`, {method:'DELETE', headers:{'Content-Type':'application/json'}, body:JSON.stringify({version:state.deleteItem.version})}); $('#placeConfirm').close(); toast('Restaurant moved to trash and restorable for at least 30 days.'); await loadRestaurants(); }
   catch (error) { toast(error.message); }
 });
 createCuisineChips($('.editor-cuisines')); createCuisineChips($('.chooser-cuisines')); $('#restaurantSort').hidden = true; loadRestaurants();

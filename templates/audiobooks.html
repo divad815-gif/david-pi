@@ -1,57 +1,76 @@
+{%- set davidpi_theme = 'dark' if request is defined and request.cookies.get('davidPiThemeV1') == 'dark' else 'light' -%}
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="{{ davidpi_theme }}">
 <head>
+  <meta name="server-name" content="{{ server_name }}">
+  <script type="application/json" id="installation-config">{{ public_installation|tojson }}</script>
+  <script src="/static/installation.js?v=2"></script>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=auto">
   <meta name="csrf-token" content="{{ csrf_token }}">
+  <meta name="audiobook-progress-scope" content="{{ audiobook_progress_scope }}">
   <meta name="theme-color" content="#fffaf2">
+  <meta name="color-scheme" content="{{ davidpi_theme }}">
+  <script src="/static/theme-bootstrap.js?v=8"></script>
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
-  <meta name="apple-mobile-web-app-title" content="David-Pi">
+  <meta name="apple-mobile-web-app-title" content="{{ server_name }}">
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="apple-touch-icon" sizes="180x180" href="/david-pi-icon-180.png">
-  <title>Audiobooks · David-Pi</title>
-  <link rel="stylesheet" href="/static/app.css?v=15">
-  <link rel="stylesheet" href="/static/platform.css?v=16">
-  <link rel="stylesheet" href="/static/audiobook-shelf.css?v=3">
+  <title>Audiobooks · {{ server_name }}</title>
+  <link rel="stylesheet" href="/static/app.css?v=40">
+  <link rel="stylesheet" href="/static/platform.css?v=25">
+  <link rel="stylesheet" href="/static/audiobook-shelf.css?v=6">
+  <link rel="stylesheet" href="/static/david-pi-ui.css?v=16">
 </head>
 <body class="module-page audiobook-page">
   <header class="module-bar">
     <a class="back" href="/" aria-label="Back home">&larr;</a>
-    <div><p>David-Pi</p><h1>Audiobooks</h1></div>
-    <button class="round-primary compact-primary" id="openAudiobookUpload">+ Add</button>
+    <div><p>{{ server_name }}</p><h1>Audiobooks</h1></div>
+    <button class="round-primary compact-primary" id="openAudiobookUpload" type="button">+ Add</button>
   </header>
   <main class="module-shell audiobook-shell">
     <section class="module-intro audiobook-intro">
       <div><p class="sheet-kicker">Your listening shelf</p><h2>Stories, ready when you are.</h2><p>Keep DRM-free audiobooks at home and pick up where you left off.</p></div>
     </section>
-    <label class="module-search"><span>&#8981;</span><input id="audiobookSearch" type="search" placeholder="Search titles, authors, or series"></label>
+    <label class="module-search"><span aria-hidden="true">&#8981;</span><input id="audiobookSearch" type="search" placeholder="Search titles, authors, or series" aria-label="Search audiobooks"></label>
     {% if current_person.verified %}<p class="identity-note">Listening as {{ current_person.name }}</p>{% endif %}
     <nav class="chip-nav" id="audiobookViews" aria-label="Audiobook filters">
-      <button class="selected" data-owner="">Shared shelf</button>
-      <button data-owner="mine">Added by me</button>
-      <button data-view="deleted">Recently Deleted</button>
+      <button class="selected" data-owner="" aria-pressed="true" type="button">Shared shelf</button>
+      <button data-owner="mine" aria-pressed="false" type="button">Added by me</button>
+      <button data-view="deleted" aria-pressed="false" type="button">Recently Deleted</button>
     </nav>
-    <section class="audiobook-grid" id="audiobookGrid"></section>
+    <aside class="audiobook-offline-entry" aria-labelledby="offlineEntryTitle">
+      <div><strong id="offlineEntryTitle">Going somewhere with limited internet?</strong><span id="offlineEntryStatus">Save a shared book once, then listen from this device without a connection. Interrupted saves can resume.</span></div>
+      <a href="/static/audiobooks-offline.html">Manage offline books</a>
+    </aside>
+    <p class="audiobook-results" id="audiobookResults" role="status" aria-live="polite">Loading your shelf…</p>
+    <section class="audiobook-grid" id="audiobookGrid" aria-labelledby="audiobookResults" aria-busy="true"></section>
+    <section class="module-empty audiobook-load-error" id="audiobooksLoadError" hidden>
+      <span aria-hidden="true">!</span><h2>The shelf did not load.</h2>
+      <p>Your books are unchanged. Check the connection and try again.</p>
+      <button class="big-button" id="retryAudiobooks" type="button">Try again</button>
+    </section>
     <section class="module-empty" id="audiobooksEmpty" hidden>
       <span aria-hidden="true">&#9835;</span><h2>Your shelf is waiting.</h2>
       <p>Add a DRM-free MP3, M4B, M4A, AAC, OGG, Opus, FLAC, or WAV audiobook.</p>
-      <button class="big-button" id="emptyAddAudiobook">Add audiobooks</button>
+      <button class="big-button" id="emptyAddAudiobook" type="button">Add audiobooks</button>
     </section>
+    <button class="audiobook-load-more" id="loadMoreAudiobooks" type="button" hidden>Load more books</button>
   </main>
 
-  <dialog class="small-sheet audiobook-upload-sheet" id="audiobookUploadSheet">
-    <button class="close" id="closeAudiobookUpload" aria-label="Close">&times;</button>
+  <dialog class="small-sheet audiobook-upload-sheet" id="audiobookUploadSheet" aria-label="Add audiobooks">
+    <button class="close" id="closeAudiobookUpload" type="button" aria-label="Close add-audiobook dialog">&times;</button>
     <p class="sheet-kicker">Bring a book home</p><h2>Add audiobooks</h2>
     <label class="file-drop"><input id="audiobookInput" type="file" accept="audio/*,.m4b,.opus,.flac" multiple><span class="file-drop-plus" aria-hidden="true">+</span><strong>Choose full books</strong><span>Up to 20 DRM-free files at once</span></label>
     <label class="text-field">Who can see these books?<select id="audiobookVisibility"><option value="shared">Shared</option><option value="private">Only me</option></select></label>
     <div class="selected-files" id="selectedAudiobooks"></div>
-    <button class="big-button" id="startAudiobookUpload">Import audiobooks</button>
-    <p class="upload-message" id="audiobookUploadMessage"></p>
+    <button class="big-button" id="startAudiobookUpload" type="button">Import audiobooks</button>
+    <p class="upload-message" id="audiobookUploadMessage" role="status" aria-live="polite"></p>
   </dialog>
 
-  <dialog class="audiobook-player-sheet" id="audiobookPlayer">
-    <button class="audiobook-player-close" id="closeAudiobookPlayer" aria-label="Close">&times;</button>
+  <dialog class="audiobook-player-sheet" id="audiobookPlayer" aria-labelledby="playerTitle">
+    <button class="audiobook-player-close" id="closeAudiobookPlayer" type="button" aria-label="Minimize audiobook player">&#8964;</button>
     <div class="audiobook-player-cover" id="playerCover"><span>&#9835;</span></div>
     <p class="sheet-kicker" id="playerSeries">Now playing</p>
     <h2 id="playerTitle"></h2><p class="audiobook-author" id="playerAuthor"></p>
@@ -65,20 +84,28 @@
       <label>Chapter<select id="chapterSelect"><option value="">Full book</option></select></label>
       <label>Sleep<select id="sleepTimer"><option value="0">Off</option><option value="10">10 min</option><option value="20">20 min</option><option value="30">30 min</option><option value="45">45 min</option><option value="60">60 min</option></select></label>
     </div>
-    <p class="audiobook-save-state" id="progressState">Progress saves automatically.</p>
-    <a class="backup-outline audiobook-download" id="downloadAudiobook" download>Download original</a>
+    <p class="audiobook-save-state" id="progressState" role="status" aria-live="polite">Progress saves automatically.</p>
+    <div class="audiobook-player-end-actions">
+      <button class="backup-outline audiobook-stop" id="stopAudiobookPlayer" type="button">Stop audiobook</button>
+      <a class="backup-outline audiobook-download" id="downloadAudiobook" download>Download original</a>
+    </div>
   </dialog>
 
-  <dialog class="small-sheet" id="editAudiobookSheet">
-    <button class="close" id="closeAudiobookEdit" aria-label="Close">&times;</button><p class="sheet-kicker">Book details</p><h2>Edit audiobook</h2>
+  <dialog class="small-sheet" id="editAudiobookSheet" aria-label="Edit audiobook">
+    <button class="close" id="closeAudiobookEdit" type="button" aria-label="Close edit-audiobook dialog">&times;</button><p class="sheet-kicker">Book details</p><h2>Edit audiobook</h2>
     <label class="text-field">Title<input id="editAudiobookTitle" maxlength="180"></label>
     <label class="text-field">Author<input id="editAudiobookAuthor" maxlength="160"></label>
     <label class="text-field">Visibility<select id="editAudiobookVisibility"><option value="shared">Shared</option><option value="private">Only me</option></select></label>
-    <div class="dialog-actions"><button class="dialog-cancel" id="cancelAudiobookEdit">Cancel</button><button class="big-button" id="saveAudiobookEdit">Save changes</button></div>
+    <div class="dialog-actions"><button class="dialog-cancel" id="cancelAudiobookEdit" type="button">Cancel</button><button class="big-button" id="saveAudiobookEdit" type="button">Save changes</button></div>
   </dialog>
   <div class="toast" id="platformToast" hidden role="status"></div>
-  <script src="/static/mobile-dialog-host.js?v=8" defer></script>
-  <script src="/static/vendor/hls/hls.min.js?v=1.6.16" defer></script>
-  <script src="/static/audiobooks.js?v=15" defer></script>
+  <script src="/static/david-pi-ui.js?v=15" defer></script>
+  <script src="/static/mobile-dialog-host.js?v=10" defer></script>
+  <script src="/static/audiobook-progress.js?v=4" defer></script>
+  <script src="/static/audiobook-continuity.js?v=2" defer></script>
+  <script src="/static/sha256-stream.js?v=1" defer></script>
+  <script src="/static/audiobook-offline-web.js?v=10" defer></script>
+  <script src="/static/audiobook-ui-safety.js?v=3" defer></script>
+  <script src="/static/audiobooks.js?v=31" defer></script>
 </body>
 </html>

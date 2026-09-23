@@ -4,8 +4,7 @@ set -eu
 SOURCE_ROOT=/srv/compose/photo-portal
 SECRET_ROOT="$SOURCE_ROOT/secrets"
 BACKUP_ROOT=/srv/backups/photo-portal
-IMAGE="${DAVID_PI_IMAGE:-$(cd "$SOURCE_ROOT" && docker compose config --images | head -n1)}"
-test -n "$IMAGE"
+IMAGE=david-family-photos:9.16.0-chat
 CHAT_KEY="$SECRET_ROOT/chat-master.key"
 VAPID_KEY="$SECRET_ROOT/chat-vapid-private.pem"
 ENV_FILE="$SOURCE_ROOT/.env"
@@ -25,6 +24,11 @@ fi
 
 chown root:10001 "$CHAT_KEY" "$VAPID_KEY"
 chmod 0440 "$CHAT_KEY" "$VAPID_KEY"
+
+for secret in "$CHAT_KEY" "$VAPID_KEY"; do
+  [ ! -L "$secret" ] && [ -f "$secret" ]
+  [ "$(stat -Lc '%u:%g:%a:%h' "$secret")" = '0:10001:440:1' ]
+done
 
 VAPID_PUBLIC="$(docker run --rm --entrypoint python \
   -v "$VAPID_KEY:/run/key.pem:ro" "$IMAGE" -c \

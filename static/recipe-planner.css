@@ -1,0 +1,57 @@
+.weekly-planner { padding: 1.3rem; margin-bottom: 2rem; border: 1px solid var(--line, #aaa); border-radius: 24px; }
+.weekly-planner h2 { font-size: clamp(1.65rem, 4vw, 2rem); margin: 0; }
+.planner-heading { display:flex; align-items:end; justify-content:space-between; gap:20px; }
+.planner-heading .sheet-kicker { margin:0 0 8px; }
+.planner-heading .text-field { margin:0; flex-shrink:0; }
+.planner-status-row { display:flex; align-items:center; flex-wrap:wrap; gap:8px 16px; margin:0 0 16px; }
+.planner-status-row p { margin:0; color:var(--muted); font-size:.875rem; }
+.weekly-planner[data-state=error] .planner-status-row, .weekly-planner[data-state=conflict] .planner-status-row { padding:12px; background:var(--surface-subtle); border:1px solid var(--line); border-radius:12px; }
+.weekly-planner[data-state=error] .planner-status-row p, .weekly-planner[data-state=conflict] .planner-status-row p { color:var(--ink); }
+.grocery-group { padding:16px 0; border-bottom:1px solid var(--line); }
+.grocery-group h4 { font-size:1.1rem; margin:0 0 8px; }
+.grocery-group p { overflow-wrap:anywhere; }
+.grocery-group-controls { display:flex; align-items:center; gap:12px; }
+.grocery-group-controls input { width:24px; height:24px; accent-color:var(--peach); }
+.weekly-planner input { max-width: 100%; }
+.weekly-planner button, .planner-picker button {
+  appearance:none; font:inherit; font-weight:650; line-height:1.2;
+  color:var(--ink,#222019); background:var(--surface-subtle,#fff4ed);
+  border:1px solid var(--line,rgba(34,32,25,.16)); border-radius:999px;
+  padding:.7rem 1rem; min-height:44px; cursor:pointer;
+}
+.weekly-planner button:hover, .planner-picker button:hover { background:var(--accent-subtle,#f4dfcf); }
+.weekly-planner button:focus-visible, .planner-picker button:focus-visible { outline:3px solid #e8a377; outline-offset:3px; }
+.weekly-planner button:disabled, .planner-picker button:disabled { opacity:.55; cursor:default; }
+#plannerChoose, #plannerAdd button, #plannerChoices button {
+  background:var(--peach,#f1ad7f); color:var(--night-accent-ink,#302117); border-color:transparent;
+}
+#plannerAdd { display:flex; align-items:end; gap:.7rem; margin-bottom:1rem; }
+#plannerAdd label { flex:1; min-width:0; }
+.planner-row { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:.55rem; padding:.8rem 0; border-bottom:1px solid var(--line, #aaa); }
+#plannerItems .planner-row { grid-template-columns:24px minmax(0,1fr) auto; }
+.planner-row-actions, .planner-edit-actions { display:flex; flex-wrap:wrap; align-items:center; gap:6px; }
+.planner-edit-actions { margin-top:8px; }
+.planner-row-actions[hidden] { display:none; }
+#plannerItems .planner-row.is-editing { grid-template-columns:24px minmax(0,1fr); }
+.planner-row .planner-copy { flex:1; min-width:0; overflow-wrap:anywhere; }
+.planner-row small { display:block; opacity:.8; }
+.planner-row input[type=checkbox] { width:24px; height:24px; margin:0; accent-color:#f1ad7f; }
+.planner-row button { padding:.55rem .7rem; font-size:.85rem; }
+.planner-copy > button { margin:.4rem .3rem 0 0; }
+.planner-row input[type=text] { width:100%; box-sizing:border-box; background:transparent; color:inherit; border:1px solid var(--line,#888); padding:.6rem; border-radius:8px; }
+.planner-row.is-checked:not(.is-editing) .planner-copy { opacity:.65; text-decoration:line-through; }
+.weekly-planner[data-state=ready] #plannerRecipes:empty::after { content:'No recipes planned yet.'; display:block; padding:1rem 0; }
+.weekly-planner[data-state=ready] #plannerItems:empty::after { content:'Your grocery list will appear here.'; display:block; padding:1rem 0; }
+.planner-picker { max-height:85dvh; overflow:auto; }
+.weekly-planner details { margin-top:1rem; }
+@media(max-width:480px) {
+  .weekly-planner { padding:1rem; }
+  .planner-heading { align-items:stretch; flex-direction:column; gap:16px; }
+  #plannerAdd { align-items:stretch; flex-direction:column; }
+  #plannerAdd button { align-self:flex-start; }
+  #plannerItems .planner-row { grid-template-columns:24px minmax(0,1fr) auto; }
+  #plannerItems .planner-row > input { grid-row:1; }
+  #plannerItems .planner-copy { grid-column:2 / 4; grid-row:1; }
+  #plannerItems .planner-row-actions { grid-row:2; grid-column:2 / 4; }
+  #plannerItems .planner-row.is-editing .planner-copy { grid-column:2; }
+}

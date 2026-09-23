@@ -17,6 +17,12 @@
     conversations: [],
     pendingDeleteId: '',
     pendingDeleteName: '',
+    pendingDeleteVersion: 0,
+    conflictedAndroidToken: '',
+    messageEdit: null,
+    messageDelete: null,
+    messageMutationBusy: false,
+    editDrafts: new Map(),
   };
   const headers = { 'X-CSRF-Token': csrf, 'Content-Type': 'application/json' };
 
@@ -27,7 +33,14 @@
   async function json(url, options = {}) {
     const response = await fetch(url, { credentials: 'same-origin', ...options });
     const data = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(data.error || 'David-Pi could not complete that request.');
+    const detail = typeof data.error === 'string' ? data.error : data.error?.message;
+    if (!response.ok) {
+      const error = new Error(detail || 'The server could not complete that request.');
+      error.status = response.status;
+      error.code = typeof data.code === 'string' ? data.code : '';
+      error.data = data;
+      throw error;
+    }
     return data;
   }
 
@@ -98,12 +111,12 @@
     $('emptyConversations').hidden = data.conversations.length > 0;
     $('conversationList').innerHTML = data.conversations.map((conversation) => `
       <div class="conversation-card">
-        <button class="conversation ${conversation.id === state.active ? 'active' : ''}" data-id="${escape(conversation.id)}">
+        <button type="button" class="conversation ${conversation.id === state.active ? 'active' : ''}" data-id="${escape(conversation.id)}">
           <span class="avatar">${escape(conversation.title.slice(0, 1).toUpperCase())}</span>
           <span class="conversation-copy"><strong>${escape(conversation.title)}</strong><span>${escape(conversation.preview)}</span></span>
           <span class="conversation-meta"><time>${relative(conversation.updated_at)}</time>${conversation.unread ? `<span class="badge">${conversation.unread}</span>` : ''}</span>
         </button>
-        <button class="conversation-delete" type="button" data-delete-id="${escape(conversation.id)}" data-delete-name="${escape(conversation.title)}" aria-label="Delete chat with ${escape(conversation.title)}">Delete</button>
+        <button class="conversation-delete" type="button" data-delete-id="${escape(conversation.id)}" data-delete-name="${escape(conversation.title)}" data-delete-version="${conversation.version}" aria-label="Leave chat with ${escape(conversation.title)}">Leave</button>
       </div>`).join('');
     document.querySelectorAll('.conversation').forEach((button) => {
       button.onclick = () => openThread(button.dataset.id);
@@ -112,7 +125,7 @@
       button.onclick = (event) => {
         event.preventDefault();
         event.stopPropagation();
-        openDeleteConversation(button.dataset.deleteId, button.dataset.deleteName);
+        openDeleteConversation(button.dataset.deleteId, button.dataset.deleteName, Number(button.dataset.deleteVersion));
       };
     });
     if (state.active && !document.querySelector(`[data-id="${selectorValue(state.active)}"]`)) state.active = '';
@@ -130,7 +143,7 @@
     $('welcomePane').hidden = true;
     const conversation = state.conversations.find((item) => item.id === id);
     $('threadName').textContent = conversation?.title || 'Conversation';
-    $('threadMembers').textContent = conversation?.members?.map((member) => member.display_name).join(' · ') || '';
+    $('threadMembers').textContent = conversation?.members?.map((member) => `${member.display_name}${member.active ? '' : ' (left)'}`).join(' · ') || '';
     await loadMessages({ initial: true });
     startPolling();
     loadConversations().catch(() => {});
@@ -138,18 +151,18 @@
 
   function messageHTML(message) {
     const photos = message.attachments.map((attachment) => `
-      <button data-photo="${escape(attachment.id)}" data-original="${escape(attachment.download_url)}">
+      <button type="button" data-photo="${escape(attachment.id)}" data-original="${escape(attachment.download_url)}">
         <img loading="lazy" src="${escape(attachment.preview_url)}" alt="Shared photo">
       </button>`).join('');
     const body = message.deleted ? 'Message deleted' : escape(message.body).replace(/\n/g, '<br>');
     return `<article class="bubble ${message.mine ? 'mine' : ''} ${message.deleted ? 'deleted' : ''}"
-        data-message="${message.id}" data-plain-body="${escape(message.body || '')}">
+        data-message="${message.id}" data-version="${message.version}" data-plain-body="${escape(message.body || '')}">
       ${!message.mine ? `<p class="bubble-name">${escape(message.sender_name)}</p>` : ''}
       <div class="bubble-body">${photos ? `<div class="chat-photos">${photos}</div>` : ''}${body}</div>
       <div class="bubble-meta">
         <time>${new Date(message.created_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</time>
         ${message.updated_at && !message.deleted ? '<span>edited</span>' : ''}
-        ${message.mine && !message.deleted ? `<span>${escape(message.delivery)}</span><span class="bubble-actions"><button data-edit="${message.id}">Edit</button> <button data-delete="${message.id}">Delete</button></span>` : ''}
+        ${message.mine && !message.deleted ? `<span>${escape(message.delivery)}</span><span class="bubble-actions"><button type="button" data-edit="${message.id}">Edit</button> <button type="button" data-delete="${message.id}">Delete</button></span>` : ''}
       </div>
     </article>`;
   }
@@ -292,25 +305,116 @@
     }
   }
 
-  async function editMessage(id) {
+  function editMessage(id) {
     const article = document.querySelector(`[data-message="${id}"]`);
-    const value = prompt('Edit message', article?.dataset.plainBody || '');
-    if (value === null) return;
-    try {
-      await json(`/api/chat/messages/${id}`, { method: 'PATCH', headers, body: JSON.stringify({ body: value }) });
-      await loadMessages({ refresh: true });
-    } catch (error) {
-      setComposerStatus(error.message);
-    }
+    if (!article || state.messageMutationBusy) return;
+    const key = `${state.active}:${id}`;
+    const draft = state.editDrafts.get(key) || {body: article.dataset.plainBody || '', version: Number(article.dataset.version)};
+    state.messageEdit = {id, conversation: state.active, key, ...draft};
+    $('editMessageBody').value = draft.body;
+    messageError('edit', '');
+    const changed = draft.version !== Number(article.dataset.version);
+    $('reloadEditedMessage').hidden = !changed;
+    $('saveEditedMessage').disabled = changed;
+    if (changed) messageError('edit', 'This message changed elsewhere. Your draft is kept. Load latest replaces it with the current message.');
+    $('editMessageDialog').showModal();
   }
 
-  async function deleteMessage(id) {
-    if (!confirm('Delete this message for everyone in the conversation?')) return;
+  function deleteMessage(id) {
+    const article = document.querySelector(`[data-message="${id}"]`);
+    if (!article || state.messageMutationBusy) return;
+    state.messageDelete = {id, conversation: state.active, version: Number(article.dataset.version)};
+    $('deleteMessagePreview').textContent = article.dataset.plainBody || 'Photo message';
+    $('reloadDeletedMessage').hidden = true;
+    $('confirmDeleteMessage').disabled = false;
+    messageError('delete', '');
+    $('deleteMessageDialog').showModal();
+  }
+
+  function messageError(kind, message) {
+    const output = $(kind === 'edit' ? 'editMessageError' : 'deleteMessageError');
+    output.textContent = message; output.hidden = !message;
+  }
+  function retainEditDraft() {
+    const editing = state.messageEdit;
+    if (editing) state.editDrafts.set(editing.key, {body: $('editMessageBody').value, version: editing.version});
+  }
+  function closeMessageDialog(kind) {
+    if (state.messageMutationBusy) return;
+    if (kind === 'edit') retainEditDraft();
+    $(kind === 'edit' ? 'editMessageDialog' : 'deleteMessageDialog').close();
+    state[kind === 'edit' ? 'messageEdit' : 'messageDelete'] = null;
+  }
+  function messageBusy(kind, busy) {
+    state.messageMutationBusy = busy;
+    const form = $(kind === 'edit' ? 'editMessageForm' : 'deleteMessageForm');
+    form.setAttribute('aria-busy', String(busy));
+    form.querySelectorAll('button, textarea').forEach(control => { control.disabled = busy; });
+    if (!busy) {
+      $(kind === 'edit' ? 'saveEditedMessage' : 'confirmDeleteMessage').disabled = !$(kind === 'edit' ? 'reloadEditedMessage' : 'reloadDeletedMessage').hidden;
+    }
+  }
+  function updateMessage(message, conversation) {
+    if (state.active !== conversation) return;
+    const article = document.querySelector(`[data-message="${message.id}"]`);
+    if (article) { article.outerHTML = messageHTML(message); wireMessages(); }
+  }
+  async function latestMessage(target) {
+    const data = await json(`/api/chat/conversations/${target.conversation}/messages?before=${Number(target.id) + 1}&limit=1`);
+    const message = data.messages.find(item => String(item.id) === String(target.id));
+    if (!message || message.deleted) throw new Error('This message is no longer available. Your draft has not been changed.');
+    return message;
+  }
+  async function reloadMessage(kind) {
+    const target = state[kind === 'edit' ? 'messageEdit' : 'messageDelete'];
+    if (!target || state.messageMutationBusy) return;
+    messageBusy(kind, true);
     try {
-      await json(`/api/chat/messages/${id}`, { method: 'DELETE', headers });
-      await loadMessages({ refresh: true });
+      const message = await latestMessage(target);
+      target.version = message.version;
+      if (kind === 'edit') { $('editMessageBody').value = message.body; retainEditDraft(); }
+      else $('deleteMessagePreview').textContent = message.body || 'Photo message';
+      updateMessage(message, target.conversation);
+      $(kind === 'edit' ? 'reloadEditedMessage' : 'reloadDeletedMessage').hidden = true;
+      messageError(kind, '');
     } catch (error) {
-      setComposerStatus(error.message);
+      messageError(kind, error.message);
+    } finally { messageBusy(kind, false); }
+  }
+  async function saveMessageMutation(kind, event) {
+    event.preventDefault();
+    const target = state[kind === 'edit' ? 'messageEdit' : 'messageDelete'];
+    if (!target || state.messageMutationBusy) return;
+    if (kind === 'edit') retainEditDraft();
+    messageBusy(kind, true); messageError(kind, '');
+    let succeeded = false;
+    try {
+      const data = await json(`/api/chat/messages/${target.id}`, {
+        method: kind === 'edit' ? 'PATCH' : 'DELETE', headers,
+        body: JSON.stringify({version: target.version, ...(kind === 'edit' ? {body: $('editMessageBody').value} : {})})
+      });
+      if (kind === 'edit') { state.editDrafts.delete(target.key); updateMessage(data.message, target.conversation); }
+      else {
+        state.editDrafts.delete(`${target.conversation}:${target.id}`);
+        if (state.active === target.conversation) {
+          const article = document.querySelector(`[data-message="${target.id}"]`);
+          if (article) { article.classList.add('deleted'); article.querySelector('.bubble-body').textContent = 'Message deleted'; article.querySelector('.bubble-actions')?.remove(); }
+        }
+      }
+      succeeded = true;
+      loadConversations().catch(() => {});
+    } catch (error) {
+      const conflict = Boolean(error.data?.conflict);
+      $(kind === 'edit' ? 'reloadEditedMessage' : 'reloadDeletedMessage').hidden = !conflict;
+      messageError(kind, conflict
+        ? (kind === 'edit' ? 'This message changed elsewhere. Your draft is kept. Load latest replaces it with the current message.' : 'This message changed elsewhere. Review the latest message before deleting it.')
+        : `${error.message}${kind === 'edit' ? ' Your draft is kept.' : ' You can retry when the connection is ready.'}`);
+    } finally {
+      messageBusy(kind, false);
+      if (succeeded) {
+        state[kind === 'edit' ? 'messageEdit' : 'messageDelete'] = null;
+        $(kind === 'edit' ? 'editMessageDialog' : 'deleteMessageDialog').close();
+      }
     }
   }
 
@@ -347,8 +451,8 @@
   function resetDeleteConversation() {
     state.pendingDeleteId = '';
     state.pendingDeleteName = '';
-    $('deleteChatPhrase').value = '';
-    $('confirmDeleteChat').disabled = true;
+    state.pendingDeleteVersion = 0;
+    $('confirmDeleteChat').disabled = false;
     $('deleteChatError').textContent = '';
     $('deleteChatError').hidden = true;
   }
@@ -358,27 +462,25 @@
     resetDeleteConversation();
   }
 
-  function openDeleteConversation(id, name) {
+  function openDeleteConversation(id, name, version) {
     if (!id) return;
     state.pendingDeleteId = id;
     state.pendingDeleteName = name || 'this conversation';
-    $('deleteChatCopy').textContent = `This permanently removes ${state.pendingDeleteName} and every message for everyone. Leaving Chat never performs this action.`;
+    state.pendingDeleteVersion = Number(version || 0);
+    $('deleteChatCopy').textContent = `This removes ${state.pendingDeleteName} from your list only. Other members and the encrypted shared history stay unchanged.`;
     $('deleteChatDialog').showModal();
-    $('deleteChatPhrase').focus();
-  }
-
-  function setDeleteConversationState() {
-    $('confirmDeleteChat').disabled = $('deleteChatPhrase').value.trim() !== 'DELETE CHAT';
+    $('confirmDeleteChat').focus();
   }
 
   async function deleteConversation(event) {
     event.preventDefault();
     const id = state.pendingDeleteId;
-    if (!id || $('deleteChatPhrase').value.trim() !== 'DELETE CHAT') return;
+    const version = state.pendingDeleteVersion;
+    if (!id || !version) return;
     $('confirmDeleteChat').disabled = true;
     try {
       await json(`/api/chat/conversations/${id}`, {
-        method: 'DELETE', headers, body: JSON.stringify({ confirmation: 'DELETE CHAT', conversation_id: id }),
+        method: 'DELETE', headers, body: JSON.stringify({ action: 'leave', confirmation: 'LEAVE CHAT', conversation_id: id, version }),
       });
       closeDeleteConversation();
       showConversationList();
@@ -387,7 +489,7 @@
     } catch (error) {
       $('deleteChatError').textContent = error.message;
       $('deleteChatError').hidden = false;
-      setDeleteConversationState();
+      $('confirmDeleteChat').disabled = false;
     }
   }
 
@@ -415,12 +517,12 @@
       $('newChatError').hidden = true;
       $('newChatError').textContent = '';
       $('userChoices').innerHTML = data.users.length ? data.users.map((user) => `
-        <label class="user-choice"><input type="checkbox" value="${escape(user.owner_id)}"><strong>${escape(user.display_name)}</strong></label>`).join('') : '<p>No other verified David-Pi users are known yet. They must open the site once first.</p>';
+        <label class="user-choice"><input type="checkbox" value="${escape(user.owner_id)}"><strong>${escape(user.display_name)}</strong></label>`).join('') : '<p>No other household members have opened Chat yet. An administrator can admit people in Settings.</p>';
       document.querySelectorAll('#userChoices input').forEach((input) => input.addEventListener('change', setNewChatState));
       setNewChatState();
       $('newChatDialog').showModal();
     } catch (_error) {
-      $('emptyConversations').textContent = 'David-Pi could not load household members. Please try again.';
+      $('emptyConversations').textContent = 'The server could not load household members. Please try again.';
     }
   }
 
@@ -442,7 +544,7 @@
       await loadConversations();
       await openThread(data.id);
     } catch (_error) {
-      $('newChatError').textContent = 'David-Pi could not create that conversation. Nothing was changed; you can retry or cancel.';
+      $('newChatError').textContent = 'The server could not create that conversation. Nothing was changed; you can retry or cancel.';
       $('newChatError').hidden = false;
       setNewChatState();
     }
@@ -475,7 +577,12 @@
 
   async function chooseGif(url) {
     try {
-      const response = await fetch(`/api/chat/gifs/fetch?url=${encodeURIComponent(url)}`, { credentials: 'same-origin' });
+      const target = new URL(url, location.origin);
+      if (target.origin !== location.origin || target.search || target.hash ||
+          !/^\/api\/chat\/gifs\/media\/[A-Za-z0-9_-]{32,4096}$/.test(target.pathname)) {
+        throw new Error('That GIF could not be imported.');
+      }
+      const response = await fetch(target.pathname, { credentials: 'same-origin' });
       if (!response.ok) throw new Error('That GIF could not be imported.');
       state.extraFiles = [new File([await response.blob()], 'giphy.gif', { type: 'image/gif' })];
       showAttachmentCount();
@@ -508,6 +615,45 @@
     return Uint8Array.from(atob(padded), (character) => character.charCodeAt(0));
   }
 
+  function isPushCredentialConflict(error) {
+    return error?.status === 409 && error?.code === 'push_credential_conflict';
+  }
+
+  async function postWebSubscription(subscription) {
+    return json('/api/chat/push/web', {
+      method: 'POST', headers, body: JSON.stringify(subscription.toJSON()),
+    });
+  }
+
+  async function registerWebSubscription(registration, subscription, publicKey = '') {
+    try {
+      await postWebSubscription(subscription);
+      return subscription;
+    } catch (error) {
+      if (!isPushCredentialConflict(error)) throw error;
+      const key = publicKey || (await json('/api/chat/push/public-key')).public_key;
+      if (!key) throw error;
+      const priorEndpoint = subscription.endpoint;
+      if (!await subscription.unsubscribe()) throw error;
+      const replacement = await registration.pushManager.subscribe({
+        userVisibleOnly: true, applicationServerKey: vapidBytes(key),
+      });
+      // A provider must not reactivate the credential that remains owned by the
+      // previous identity. Retire an ambiguous replacement and fail closed.
+      if (replacement.endpoint === priorEndpoint) {
+        await replacement.unsubscribe();
+        throw error;
+      }
+      try {
+        await postWebSubscription(replacement);
+      } catch (replacementError) {
+        await replacement.unsubscribe();
+        throw replacementError;
+      }
+      return replacement;
+    }
+  }
+
   function setNotificationButton(label, stateName = '') {
     $('notifyButton').textContent = label;
     $('notifyButton').classList.toggle('ready', stateName === 'ready');
@@ -534,13 +680,8 @@
   }
 
   async function notificationState() {
-    if (window.DavidPiPush) {
-      if (!androidNotificationsEnabled()) { setNotificationButton('Alerts off', 'blocked'); return; }
-      if (!androidPushConfigured()) { setNotificationButton('Alerts setup', 'blocked'); return; }
-      setNotificationButton('Alerts on', 'ready');
-      window.DavidPiPush.requestToken();
-      return;
-    }
+    if (window.DavidPiPush) {setNotificationButton('Alerts unavailable', 'blocked');return;}
+    if (window.DavidPiInstallation?.web_push === false) {setNotificationButton('Alerts not configured','blocked');return;}
     if (!('Notification' in window)) { setNotificationButton('Alert help', 'blocked'); return; }
     if (Notification.permission === 'denied') { setNotificationButton('Alerts off', 'blocked'); return; }
     if (Notification.permission !== 'granted') { setNotificationButton('Allow alerts'); return; }
@@ -552,7 +693,7 @@
       const registration = await navigator.serviceWorker.ready;
       const subscription = await registration.pushManager.getSubscription();
       if (!subscription) { setNotificationButton('Finish alerts', 'blocked'); return; }
-      await json('/api/chat/push/web', { method: 'POST', headers, body: JSON.stringify(subscription.toJSON()) });
+      await registerWebSubscription(registration, subscription);
       setNotificationButton('Alerts on', 'ready');
     } catch (_error) {
       setNotificationButton('Retry alerts', 'blocked');
@@ -561,24 +702,17 @@
 
   async function notifications() {
     if (window.DavidPiPush) {
-      if (!androidNotificationsEnabled()) {
-        showNotificationHelp('Turn alerts back on', 'Android notifications are off for David-Pi. Open settings, choose Notifications, and allow them. Then return here and tap Alerts again.', true);
-        return;
-      }
-      if (!androidPushConfigured()) {
-        showNotificationHelp('One setup step remains', 'Chat works normally. Instant Android alerts still need the private notification provider configured on the David-Pi app; your permission choice did not damage Chat.');
-        return;
-      }
-      window.DavidPiPush.requestToken();
-      setNotificationButton('Alerts on', 'ready');
-      return;
+      showNotificationHelp('Native alerts are unavailable', 'This Android release supports Chat while the app is open. Native chat notifications are not included.');return;
+    }
+    if (window.DavidPiInstallation?.web_push === false) {
+      showNotificationHelp('Browser alerts are not configured', 'An administrator can enable optional browser notifications in Settings. Chat works without alerts.');return;
     }
     if (!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) {
-      showNotificationHelp('Install David-Pi first', 'Add David-Pi to the Home Screen, open that installed app, then return to Chat to allow private notifications.');
+      showNotificationHelp(`Install ${window.davidPiServerName || 'this home server'} first`, 'Add this website to the Home Screen, open that installed app, then return to Chat to allow private notifications.');
       return;
     }
     if (Notification.permission === 'denied') {
-      showNotificationHelp('Notifications are blocked', 'Open this device\'s notification settings for David-Pi and turn notifications on. On iPhone: Settings, Notifications, David-Pi, then Allow Notifications.');
+      showNotificationHelp('Notifications are blocked', `Open this device's notification settings for ${window.davidPiServerName || 'this home server'} and turn notifications on.`);
       return;
     }
     try {
@@ -593,20 +727,40 @@
       const registration = await navigator.serviceWorker.ready;
       let subscription = await registration.pushManager.getSubscription();
       if (!subscription) subscription = await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: vapidBytes(key.public_key) });
-      await json('/api/chat/push/web', { method: 'POST', headers, body: JSON.stringify(subscription.toJSON()) });
+      await registerWebSubscription(registration, subscription, key.public_key);
       setNotificationButton('Alerts on', 'ready');
     } catch (_error) {
-      showNotificationHelp('Alerts could not be enabled', 'Chat still works. David-Pi could not finish notification setup, so no settings were changed.');
+      showNotificationHelp('Alerts could not be enabled', 'Chat still works. The server could not finish notification setup, so no settings were changed.');
     }
   }
 
   window.davidPiRegisterAndroidPush = async (token) => {
+    if (token === state.conflictedAndroidToken) {
+      window.DavidPiPush?.retireToken?.(token);
+      setNotificationButton('Finish alerts', 'blocked');
+      return;
+    }
     try {
       await json('/api/chat/push/android', { method: 'POST', headers, body: JSON.stringify({ token }) });
+      state.conflictedAndroidToken = '';
       setNotificationButton('Alerts on', 'ready');
-    } catch (_error) {
+    } catch (error) {
+      if (isPushCredentialConflict(error)) {
+        state.conflictedAndroidToken = token;
+        window.DavidPiPush?.retireToken?.(token);
+        setNotificationButton('Finish alerts', 'blocked');
+        return;
+      }
       setNotificationButton('Alerts setup', 'blocked');
     }
+  };
+
+  window.davidPiAndroidPushRetired = () => {
+    setNotificationButton('Finish alerts', 'blocked');
+  };
+
+  window.davidPiAndroidPushRetireFailed = () => {
+    setNotificationButton('Alerts setup', 'blocked');
   };
 
   const emojis = ['😀', '😂', '🥰', '😍', '😊', '😭', '❤️', '👍', '🎉', '🔥', '🤔', '😴', '🍻', '🍕', '👀', '🙌', '💀', '😅', '😘', '🤗'];
@@ -626,6 +780,16 @@
   $('newChatDialog').addEventListener('cancel', (event) => { event.preventDefault(); closeNewChat(); });
   $('newChatForm').onsubmit = createChat;
   $('composer').onsubmit = send;
+  $('editMessageForm').onsubmit = event => saveMessageMutation('edit', event);
+  $('deleteMessageForm').onsubmit = event => saveMessageMutation('delete', event);
+  $('editMessageBody').addEventListener('input', retainEditDraft);
+  $('closeEditMessage').onclick = $('cancelEditMessage').onclick = () => closeMessageDialog('edit');
+  $('closeDeleteMessage').onclick = $('cancelDeleteMessage').onclick = () => closeMessageDialog('delete');
+  $('reloadEditedMessage').onclick = () => reloadMessage('edit');
+  $('reloadDeletedMessage').onclick = () => reloadMessage('delete');
+  for (const kind of ['edit', 'delete']) {
+    $(kind === 'edit' ? 'editMessageDialog' : 'deleteMessageDialog').addEventListener('cancel', event => { event.preventDefault(); closeMessageDialog(kind); });
+  }
   $('photoInput').onchange = showAttachmentCount;
   $('olderMessages').onclick = loadOlder;
   $('jumpLatest').onclick = () => scrollLatest('smooth');
@@ -645,7 +809,6 @@
   });
   $('threadBack').onclick = showConversationList;
   $('deleteChatForm').onsubmit = deleteConversation;
-  $('deleteChatPhrase').oninput = setDeleteConversationState;
   $('closeDeleteChat').onclick = closeDeleteConversation;
   $('cancelDeleteChat').onclick = closeDeleteConversation;
   $('deleteChatDialog').addEventListener('cancel', (event) => { event.preventDefault(); closeDeleteConversation(); });

@@ -15,12 +15,14 @@ ARCHIVE="david-pi-$VERSION.tar.gz"
 archive_sha="$(sha256sum "$OUT/$ARCHIVE" | awk '{print $1}')"
 sed "s#__GITHUB_REPOSITORY__#$REPOSITORY#g" "$ROOT/install.sh" > "$OUT/install.sh"
 chmod 0755 "$OUT/install.sh"
-sha256sum "$OUT/install.sh" > "$OUT/install.sh.sha256"
+(cd "$OUT" && sha256sum install.sh > install.sh.sha256)
 cat > "$OUT/release-manifest.txt" <<EOF
 VERSION=$VERSION
 ARCHIVE=$ARCHIVE
 ARCHIVE_SHA256=$archive_sha
 IMAGE=ghcr.io/${REPOSITORY,,}@$IMAGE_DIGEST
+DATA_SCHEMA_VERSION=1
+ROLLBACK_MIN_DATA_SCHEMA=1
 EOF
 chmod 0644 "$OUT/release-manifest.txt"
 printf '%s\n' "$OUT/release-manifest.txt"

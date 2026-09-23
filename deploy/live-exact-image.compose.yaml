@@ -1,0 +1,13 @@
+services:
+  photo-portal:
+    image: ${DAVID_PI_EXACT_IMAGE:?set DAVID_PI_EXACT_IMAGE to an immutable image ID or digest}
+  chat-notifier:
+    image: ${DAVID_PI_EXACT_IMAGE:?set DAVID_PI_EXACT_IMAGE to an immutable image ID or digest}
+  audiobook-preparer:
+    image: ${DAVID_PI_EXACT_IMAGE:?set DAVID_PI_EXACT_IMAGE to an immutable image ID or digest}
+  david-pi-maintenance:
+    image: ${DAVID_PI_EXACT_IMAGE:?set DAVID_PI_EXACT_IMAGE to an immutable image ID or digest}
+  device-backup-worker:
+    image: ${DAVID_PI_EXACT_IMAGE:?set DAVID_PI_EXACT_IMAGE to an immutable image ID or digest}
+  slideshow-worker:
+    image: ${DAVID_PI_EXACT_IMAGE:?set DAVID_PI_EXACT_IMAGE to an immutable image ID or digest}

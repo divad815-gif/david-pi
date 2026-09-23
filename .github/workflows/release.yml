@@ -1,100 +1,120 @@
-name: Release
+name: Stable release
 
 on:
-  push:
-    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      python_base:
+        description: Verified official Python 3.13 Alpine 3.22 multiarchitecture digest reference
+        required: true
+        type: string
 
 permissions:
-  contents: write
-  packages: write
+  contents: read
+
+concurrency:
+  group: stable-release
+  cancel-in-progress: false
 
 jobs:
-  verify-linux:
+  release:
+    if: github.ref == 'refs/heads/main'
+    environment: stable-release
     runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: write
+      packages: write
+    env:
+      ANDROID_BUILD_TOOLS_VERSION: 35.0.0
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.13"
+          python-version: '3.13'
           cache: pip
-      - run: sudo apt-get update && sudo apt-get install -y ffmpeg poppler-utils shellcheck rsync
-      - run: pip install -r requirements.txt pytest
-      - run: python scripts/check-public-release.py
-      - run: shellcheck -e SC1091,SC2034 david-pi install.sh installer/lib/*.sh scripts/*.sh deploy/*.sh
-      - run: bash -n david-pi install.sh installer/lib/*.sh scripts/*.sh deploy/*.sh
-      - run: pytest -q tests installer/tests
-      - run: docker compose config >/dev/null
-      - run: docker compose -f compose.yaml -f compose.dev.yaml config >/dev/null
-
-  verify-android:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: "17"
+          java-version: '17.0.20.1'
       - uses: android-actions/setup-android@v3
-      - working-directory: clients/android
-        run: ./gradlew testDebugUnitTest assembleDebug --no-daemon
-
-  release:
-    needs: [verify-linux, verify-android]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.13"
-      - run: sudo apt-get update && sudo apt-get install -y rsync
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
-      - name: Log in to GitHub Container Registry
+      - name: Install verification tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg poppler-utils shellcheck rsync
+          pip install -r requirements.txt pytest
+          sdkmanager "build-tools;$ANDROID_BUILD_TOOLS_VERSION" "platforms;android-35"
+      - name: Screen public source and test
+        run: |
+          python scripts/check-public-release.py
+          python scripts/check_tracked_secrets.py
+          pytest -q tests installer/tests
+          node --test tests/*.test.mjs
+      - name: Build with the existing Android signing identity
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PROPERTIES_BASE64: ${{ secrets.ANDROID_KEYSTORE_PROPERTIES_BASE64 }}
+        run: |
+          test -n "$ANDROID_KEYSTORE_BASE64"
+          test -n "$ANDROID_KEYSTORE_PROPERTIES_BASE64"
+          umask 077
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/android-release.jks"
+          printf '%s' "$ANDROID_KEYSTORE_PROPERTIES_BASE64" | base64 --decode > "$RUNNER_TEMP/android-release.properties"
+          export DAVID_PI_ANDROID_KEYSTORE_FILE="$RUNNER_TEMP/android-release.jks"
+          export DAVID_PI_ANDROID_KEYSTORE_PROPERTIES="$RUNNER_TEMP/android-release.properties"
+          export DAVID_PI_ANDROID_SOURCE_SHA256="$(python scripts/android_release.py source-hash)"
+          export ANDROID_JAVA="$JAVA_HOME/bin/java"
+          export PATH="$ANDROID_HOME/build-tools/$ANDROID_BUILD_TOOLS_VERSION:$PATH"
+          python scripts/android_release.py verify-java
+          (cd clients/android && ./gradlew --no-daemon testDebugUnitTest assembleRelease)
+          mkdir -p artifacts/android
+          cp clients/android/app/build/outputs/apk/release/app-release.apk artifacts/android/david-pi-backup.apk
+          python scripts/android_release.py create --output artifacts/android/david-pi-backup.manifest.json
+          python scripts/android_release.py verify
+      - name: Require completed acceptance for this exact source and APK
+        run: python scripts/stable_release_gate.py
+      - name: Build and exercise both supported architectures before publication
+        env:
+          PYTHON_BASE: ${{ inputs.python_base }}
+        run: |
+          python -c 'import sys; sys.path.insert(0,"scripts"); from release_contract import image_digest,image_repository; assert image_repository(sys.argv[1]) == "python"; print(image_digest(sys.argv[1]))' "$PYTHON_BASE"
+          mkdir -p build
+          for arch in amd64 arm64; do
+            docker pull --platform "linux/$arch" "$PYTHON_BASE"
+            python scripts/base_image_provenance.py --reference "$PYTHON_BASE" --architecture "$arch" --output "build/base-$arch.json"
+            docker buildx build --platform "linux/$arch" --target runtime-test --load --build-arg PYTHON_BASE_IMAGE="$PYTHON_BASE" -t "david-pi:test-$arch" .
+            expected=x86_64; if [ "$arch" = arm64 ]; then expected=aarch64; fi
+            docker run --rm --platform "linux/$arch" --tmpfs /tmp/test:rw,size=128m,mode=0700,uid=10001,gid=10001 --entrypoint python -e TMPDIR=/tmp/test -e PHOTO_DATA=/tmp/test -e DAVID_PI_PLATFORM_DATA=/tmp/test/platform -e DAVID_PI_EXPECT_RENAMEAT2_ARCH="$expected" "david-pi:test-$arch" -m pytest -q -p no:cacheprovider tests/test_slideshow_ffmpeg.py tests/test_app.py -k 'SlideshowFfmpegTest or audiobook_cleanup_uses_kernel_renameat2 or audiobook_cleanup_fails_closed_without_renameat2_interface or audiobook_cleanup_syscall_collision_preserves_both_files or audiobook_unlink_preserves_staging_without_renameat2_interface or audiobook_cleanup_unsupported_platform_never_calls_raw_syscall or audiobook_cleanup_release_image_matches_expected_abi'
+            docker buildx build --platform "linux/$arch" --target runtime --load --build-arg PYTHON_BASE_IMAGE="$PYTHON_BASE" -t "david-pi:release-$arch" .
+            docker run --rm --platform "linux/$arch" --network none --read-only --user 10002:10001 --entrypoint python "david-pi:release-$arch" -c 'import modules.maintenance_worker; print("Separate maintenance UID can load shared application source")'
+            docker run --rm --platform "linux/$arch" --network none --entrypoint python "david-pi:release-$arch" -c 'import importlib.metadata as m,json; print(json.dumps([{"name":d.metadata["Name"],"version":d.version} for d in m.distributions()]))' > "build/python-$arch.json"
+            docker run --rm --platform "linux/$arch" --network none --entrypoint awk "david-pi:release-$arch" -F: '$1=="P"{p=$2} $1=="V"{v=$2} $1=="A"{a=$2} $0==""{if(p&&v&&a) print p "\t" v "\t" a; p=v=a=""} END{if(p&&v&&a) print p "\t" v "\t" a}' /lib/apk/db/installed > "build/os-$arch.tsv"
+            python scripts/generate_sbom.py --python-packages "build/python-$arch.json" --os-packages "build/os-$arch.tsv" --os-package-type apk --image "david-pi:release-$arch" --revision "$GITHUB_SHA" --output "build/sbom-$arch.cdx.json"
+          done
+      - name: Log in after all acceptance checks pass
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Generate container metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ghcr.io/${{ github.repository }}
-          tags: |
-            type=ref,event=tag
-            type=raw,value=latest
-      - name: Build and publish amd64/arm64 image
-        id: build
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-      - name: Build immutable release assets
+      - name: Publish stable images and verified release assets
         env:
-          GITHUB_REPOSITORY: ${{ github.repository }}
-          DAVID_PI_IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+          PYTHON_BASE: ${{ inputs.python_base }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          python scripts/stable_release_gate.py
+          version="$(cat VERSION)"
+          repository="${GITHUB_REPOSITORY,,}"
+          docker buildx build --platform linux/amd64,linux/arm64 --target runtime --build-arg PYTHON_BASE_IMAGE="$PYTHON_BASE" --build-arg PYTHON_BASE_DIGEST="${PYTHON_BASE##*@}" --build-arg DAVID_PI_VERSION="$version" --build-arg DAVID_PI_VCS_REF="$GITHUB_SHA" --metadata-file build/published-image.json -t "ghcr.io/$repository:v$version" -t "ghcr.io/$repository:latest" --push .
+          export DAVID_PI_IMAGE_DIGEST="$(python -c 'import json; print(json.load(open("build/published-image.json"))["containerimage.digest"])')"
           scripts/build-release.sh
           scripts/build-release-metadata.sh
-      - name: Publish release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            dist/*.tar.gz
-            dist/*.sha256
-            dist/install.sh
-            dist/release-manifest.txt
-          generate_release_notes: true
-      - name: Verify anonymous release and image access
-        env:
-          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
-        run: |
-          base="https://github.com/$GITHUB_REPOSITORY/releases/download/${GITHUB_REF_NAME}"
-          curl -fsSL "$base/install.sh" -o /tmp/install.sh
-          curl -fsSL "$base/install.sh.sha256" -o /tmp/install.sh.sha256
-          (cd /tmp && sha256sum -c install.sh.sha256)
-          docker logout ghcr.io || true
-          docker pull "ghcr.io/${GITHUB_REPOSITORY,,}@$IMAGE_DIGEST"
+          cp artifacts/android/david-pi-backup.apk artifacts/android/david-pi-backup.manifest.json build/sbom-*.cdx.json build/base-*.json docs/release-evidence/stable.json dist/
+          (cd dist && sha256sum david-pi-backup.apk > david-pi-backup.apk.sha256)
+          gh release create "v$version" dist/* --title "David-Pi $version" --generate-notes --target "$GITHUB_SHA" --latest
+      - name: Remove temporary signing material
+        if: always()
+        run: rm -f "$RUNNER_TEMP/android-release.jks" "$RUNNER_TEMP/android-release.properties"

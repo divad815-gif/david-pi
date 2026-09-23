@@ -1,16 +1,26 @@
+{%- set davidpi_theme = 'dark' if request is defined and request.cookies.get('davidPiThemeV1') == 'dark' else 'light' -%}
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="{{ davidpi_theme }}">
 <head>
+  <meta name="audiobook-progress-scope" content="{{ audiobook_progress_scope }}">
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-  <title>Phone backup &middot; David-Pi</title>
-  <link rel="stylesheet" href="/static/app.css?v=17">
-  <link rel="stylesheet" href="/static/platform.css?v=17">
+  <meta name="server-name" content="{{ server_name }}">
+  <script type="application/json" id="installation-config">{{ public_installation|tojson }}</script>
+  <script src="/static/installation.js?v=2" defer></script>
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=auto">
+  <meta name="theme-color" content="#fffaf2">
+  <meta name="color-scheme" content="{{ davidpi_theme }}">
+  <script src="/static/theme-bootstrap.js?v=8"></script>
+  <title>{{ "Phone backup" if backup_enabled else "Android connection" }} &middot; {{ server_display_name }}</title>
+  <meta name="paired-server-origin" content="{{ portal_origin }}">
+  <link rel="stylesheet" href="/static/app.css?v=40">
+  <link rel="stylesheet" href="/static/platform.css?v=25">
+  <link rel="stylesheet" href="/static/david-pi-ui.css?v=16">
 </head>
 <body class="module-page backup-admin-page">
   <header class="module-bar">
     <a class="back" href="/" aria-label="Back">&larr;</a>
-    <div><p>DAVID-PI</p><h1>Phone backup</h1></div>
+    <div><p>{{ server_display_name }}</p><h1>{{ "Phone backup" if backup_enabled else "Android connection" }}</h1></div>
     <span class="profile-pill">Private</span>
   </header>
 
@@ -18,98 +28,33 @@
     <section class="backup-hero">
       <div class="backup-hero-heading">
         <span class="david-mark" aria-hidden="true"><i></i></span>
-        <div><p class="sheet-kicker">DAVID-PI APP</p><h2>Keep originals safely at home.</h2></div>
+        <div><p class="sheet-kicker">DAVID-PI APP</p><h2>{{ "Keep originals safely at home." if backup_enabled else "Connect your Android companion." }}</h2></div>
       </div>
-      <p class="backup-lead">Pair once, then send photos and videos privately to the same Media library you already use.</p>
+      <p class="backup-lead">Pair once, then open your enabled household modules privately through Tailscale.{% if backup_enabled %} Photos and videos can back up to your Media library.{% else %} Automatic phone backups are disabled by the administrator.{% endif %}</p>
       <div class="backup-pair-actions">
-        <button class="round-primary create-pairing" data-platform="android">Pair Android</button>
-        <button class="backup-outline create-pairing" data-platform="ios">Set up iPhone</button>
+        <button type="button" class="round-primary create-pairing" data-platform="android">Pair Android</button>
       </div>
       {% if apk_available %}
       <a class="backup-download" href="/device-backup/apk"><span>Download Android app</span><b>&darr;</b></a>
-      <p class="backup-version">Version {{ apk_version }} &middot; Built <time class="local-time" datetime="{{ apk_build_date }}">{{ apk_build_date }}</time></p>
+      <p class="backup-version">Version {{ apk_version }} &middot; Verified signed release</p>
       <details class="checksum"><summary>Verify the download</summary><code>{{ apk_sha256 }}</code></details>
       {% else %}
-      <p class="backup-notice">The Android app is not available on David-Pi yet.</p>
+      <p class="backup-notice">The Android download is temporarily unavailable because its signed release could not be verified. Pairing and existing backups are unaffected.</p>
       {% endif %}
     </section>
 
+    <p id="backupActionMessage" class="backup-panel" role="alert" hidden></p>
     <section id="pairing-result" class="backup-panel pairing-panel" hidden>
       <p class="sheet-kicker">PAIR FOR 10 MINUTES</p>
       <h2 id="pairing-title">Pair this phone</h2>
-      <p id="pairing-help" class="backup-muted">Choose the matching phone type above to begin.</p>
+      <p id="pairing-help" class="backup-muted">Choose Pair Android above to begin.</p>
       <img id="pairing-qr" class="pairing-qr" alt="Pairing QR code" width="220" height="220" hidden>
-      <a id="pairing-link" class="round-primary pairing-open" href="#">Open David-Pi</a>
+      <a id="pairing-link" class="round-primary pairing-open" href="#">Open {{ server_name }}</a>
       <p class="manual-code-label">Manual code</p>
       <strong class="manual-code" id="manual-code"></strong>
       <p id="pairing-expiry" class="pairing-expiry" aria-live="polite"></p>
       <button id="copy-pairing" class="backup-outline" type="button">Copy setup details</button>
       <p class="backup-muted">This one-time code expires automatically and is never stored as readable text.</p>
-    </section>
-
-    <section id="iphone-setup" class="backup-section iphone-setup" hidden>
-      <div class="backup-section-heading">
-        <div><p class="sheet-kicker">IPHONE &middot; ONE-TIME SETUP</p><h2>Install once, then pair</h2></div>
-      </div>
-      <div class="backup-panel shortcut-guide">
-        <div class="shortcut-reality-check complete-flow">
-          <strong>One Apple-shared Shortcut. No credentials inside the shared copy.</strong>
-          <p>Apple rejects unsigned Shortcut files downloaded from ordinary websites. This flow uses a Shortcut shared by Apple through iCloud, then binds it to the current David-Pi user with a ten-minute code.</p>
-        </div>
-
-        <div class="shortcut-ready">
-          <p class="sheet-kicker">STEP 1</p>
-          <h3>Install Back Up to David-Pi</h3>
-          {% if ios_shortcut_icloud_url %}
-          <p>Tap the Apple iCloud link on the iPhone, review the actions, then choose <strong>Add Shortcut</strong>. The shared Shortcut contains no David-Pi token or personal account information.</p>
-          <a class="round-primary" href="{{ ios_shortcut_icloud_url }}">Install the iPhone Shortcut</a>
-          {% else %}
-          <p>The Apple iCloud share link has not been published yet. The upload service is ready, but one household iPhone must build and share the credential-free master Shortcut once.</p>
-          <span class="round-primary shortcut-disabled" aria-disabled="true">Apple share link pending</span>
-          {% endif %}
-        </div>
-
-        <div class="shortcut-ready">
-          <p class="sheet-kicker">STEP 2</p>
-          <h3>Pair this iPhone</h3>
-          <p>Keep Tailscale connected. Generate a private code, then open the installed Shortcut. David-Pi determines the owner from the verified Tailscale user who generated the code.</p>
-          <button class="round-primary generate-ios-pairing" type="button">Generate code and pair</button>
-        </div>
-
-        <div class="shortcut-ready">
-          <p class="sheet-kicker">STEP 3</p>
-          <h3>Run the initial backup</h3>
-          <p>Approve <strong>All Photos</strong> and David-Pi network access when iOS asks. The initial library moves in 200-item batches. For a large first migration, connect power and leave Shortcuts visible. If iOS stops it, run the same Shortcut again; the server checkpoint prevents completed items from being resent.</p>
-        </div>
-
-        <details class="backup-automation-guide">
-          <summary>After the first backup: schedule incremental runs</summary>
-          <ol>
-            <li>Open Shortcuts and tap <strong>Automation</strong>, then <strong>+</strong>.</li>
-            <li>Choose <strong>Time of Day</strong>, then daily or weekly.</li>
-            <li>Choose <strong>Run Immediately</strong>.</li>
-            <li>Add <strong>Run Shortcut</strong> and select <strong>Back Up to David-Pi</strong>.</li>
-            <li>Save it and keep Tailscale enabled.</li>
-          </ol>
-        </details>
-
-        <div class="backup-notice shortcut-scope">
-          <strong>Private and owner-bound.</strong>
-          <p>Pairing grants this phone upload-only access for its bound user. It cannot browse another person&rsquo;s manifest, choose an owner, alter collections, share media, or delete anything. Diana must generate her own pairing code while David-Pi recognizes her Tailscale identity.</p>
-        </div>
-
-        <details class="backup-automation-guide">
-          <summary>Household administrator: publish the master Shortcut once</summary>
-          <ol>
-            <li>On an iPhone, create a Shortcut named <strong>Back Up to David-Pi</strong>.</li>
-            <li>Make its pairing branch accept the six-digit <strong>Shortcut Input</strong>, POST it as <code>manual_code</code> to <code>{{ public_server_url }}/api/v1/ios-backup/pair</code>, and save the returned <code>device_credential</code> only in the phone&rsquo;s private Shortcuts folder.</li>
-            <li>Make its backup branch read that local credential, call <code>/api/v1/ios-backup/status</code>, find the next oldest photos and videos after <code>capture_after</code>, and POST each original to <code>/api/v1/ios-backup/upload-file</code>.</li>
-            <li>Test pairing and one small upload, remove the test pairing, then use the Shortcut&rsquo;s share menu and choose <strong>Copy iCloud Link</strong>.</li>
-            <li>Put only that public iCloud URL in <code>IOS_SHORTCUT_ICLOUD_URL</code> on David-Pi. Never place a device token in the shared Shortcut or the environment setting.</li>
-          </ol>
-          <p>The exact action-by-action build checklist is in <code>docs/IPHONE_SHORTCUT_SETUP.md</code> in the David-Pi source.</p>
-        </details>
-      </div>
     </section>
 
     <section class="backup-section">
@@ -131,7 +76,7 @@
             <div><strong>{{ device.failed_uploads or 0 }}</strong><span>Need retry</span></div>
           </div>
           <p class="backup-muted">Last contact: <time class="local-time" datetime="{{ device.last_contact_at or '' }}">{{ device.last_contact_at or "Not yet" }}</time></p>
-          <button class="revoke-device backup-danger" data-device-id="{{ device.id }}">Remove phone</button>
+          <button type="button" class="revoke-device backup-danger" data-device-id="{{ device.id }}">Remove phone</button>
         </article>
         {% endfor %}
       </div>
@@ -140,6 +85,13 @@
       {% endif %}
     </section>
   </main>
-  <script src="/static/device-backup.js?v=11"></script>
+  <dialog class="confirm-sheet" id="backupRemoveDialog" aria-labelledby="backupRemoveTitle">
+    <h2 id="backupRemoveTitle">Remove this phone?</h2><p>Its upload access will stop immediately. Existing photos and videos stay unchanged.</p>
+    <p id="backupRemoveError" role="alert" hidden></p>
+    <div class="dialog-actions"><button id="backupKeepPhone" type="button" class="dialog-cancel">Keep phone</button><button id="backupRemovePhone" type="button" class="big-button">Remove phone</button></div>
+  </dialog>
+  <script src="/static/david-pi-ui.js?v=15" defer></script>
+  <script src="/static/mobile-dialog-host.js?v=10" defer></script>
+  <script src="/static/device-backup.js?v=16" defer></script>
 </body>
 </html>

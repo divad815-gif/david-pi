@@ -10,10 +10,10 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.os.Build
 import android.util.Base64
-import android.webkit.JavascriptInterface
 import android.webkit.WebView
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
+import com.davidpi.backup.net.DavidPiOrigin
 import android.support.v4.media.MediaMetadataCompat
 import android.support.v4.media.session.MediaSessionCompat
 import android.support.v4.media.session.PlaybackStateCompat
@@ -38,7 +38,8 @@ class NativeMediaCommandReceiver : BroadcastReceiver() {
 
 class NativeMediaBridge(private val context: Context, private val webView: WebView) {
     private val session = MediaSessionCompat(context, "DavidPiAudiobooks")
-    private var title = "David-Pi Audiobook"
+    private val serverName = com.davidpi.backup.security.CredentialStore(context).displayName
+    private var title = "$serverName audiobook"
     private var author = ""
     private var playing = false
     private var position = 0L
@@ -65,14 +66,12 @@ class NativeMediaBridge(private val context: Context, private val webView: WebVi
         }
     }
 
-    @JavascriptInterface
     fun setMetadata(newTitle: String, newAuthor: String) {
-        title = newTitle.take(180).ifBlank { "David-Pi Audiobook" }
+        title = newTitle.take(180).ifBlank { "$serverName audiobook" }
         author = newAuthor.take(180)
         publish()
     }
 
-    @JavascriptInterface
     fun setArtworkDataUrl(dataUrl: String) {
         val comma = dataUrl.indexOf(',')
         val prefix = if (comma > 0) dataUrl.substring(0, comma).lowercase() else ""
@@ -96,13 +95,11 @@ class NativeMediaBridge(private val context: Context, private val webView: WebVi
         }
     }
 
-    @JavascriptInterface
     fun clearArtwork() {
         artwork = null
         publish()
     }
 
-    @JavascriptInterface
     fun updatePlayback(isPlaying: Boolean, seconds: Double, durationSeconds: Double, playbackRate: Double) {
         playing = isPlaying
         position = (seconds.coerceAtLeast(0.0) * 1000).toLong()
@@ -120,7 +117,6 @@ class NativeMediaBridge(private val context: Context, private val webView: WebVi
         publish()
     }
 
-    @JavascriptInterface
     fun clear() {
         playing = false
         context.stopService(Intent(context, AudiobookKeepAliveService::class.java))
@@ -140,7 +136,13 @@ class NativeMediaBridge(private val context: Context, private val webView: WebVi
     private fun send(command: String, value: Double? = null) {
         val quoted = JSONObject.quote(command)
         val argument = value?.toString() ?: "null"
-        webView.post { webView.evaluateJavascript("window.davidPiNativeAudioCommand?.($quoted,$argument)", null) }
+        webView.post {
+            if (DavidPiOrigin.canonicalPortalUrl(webView.url.orEmpty()) != null) {
+                webView.evaluateJavascript(
+                    "window.davidPiNativeAudioCommand?.($quoted,$argument)", null
+                )
+            }
+        }
     }
 
     private fun pending(action: String, requestCode: Int): PendingIntent = PendingIntent.getBroadcast(
@@ -176,7 +178,7 @@ class NativeMediaBridge(private val context: Context, private val webView: WebVi
         val notification = NotificationCompat.Builder(context, MEDIA_CHANNEL)
             .setSmallIcon(android.R.drawable.ic_media_play)
             .setContentTitle(title)
-            .setContentText(author.ifBlank { "David-Pi Audiobooks" })
+            .setContentText(author.ifBlank { "$serverName audiobooks" })
             .setLargeIcon(artwork)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setOnlyAlertOnce(true)

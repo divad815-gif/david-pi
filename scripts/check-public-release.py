@@ -6,6 +6,7 @@ from __future__ import annotations
 import re
 import sys
 from pathlib import Path
+import subprocess
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -28,10 +29,12 @@ SKIP_PARTS = {".git", ".gradle", "build", "__pycache__", ".pytest_cache"}
 
 def main() -> int:
     failures: list[str] = []
-    for path in ROOT.rglob("*"):
-        if not path.is_file() or any(part in SKIP_PARTS for part in path.parts):
+    raw = subprocess.check_output(["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"], cwd=ROOT)
+    for name in sorted(set(raw.decode().split("\0")) - {""}):
+        relative = Path(name)
+        path = ROOT / relative
+        if not path.is_file():
             continue
-        relative = path.relative_to(ROOT)
         if FORBIDDEN_NAMES.search(path.name) and not path.name.endswith(".example"):
             failures.append(f"forbidden filename: {relative}")
         if path.stat().st_size > 25 * 1024 * 1024:

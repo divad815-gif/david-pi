@@ -1,12 +1,26 @@
 const $ = (id) => document.getElementById(id);
 const number = new Intl.NumberFormat();
 const labels = {
-  portal: 'Portal', external_drive: 'Data Drive', storage: 'Storage',
+  portal: 'Portal', external_drive: 'External Drive', storage: 'Storage',
   backups: 'Backups', temperature_power: 'Temperature & Power',
   tailscale: 'Tailscale', pihole: 'Pi-hole', background_jobs: 'Background Jobs',
-  services: 'Services', updates: 'Updates',
+  services: 'Services', updates: 'Updates', access_control: 'Access Control',
 };
-const stateLabels = {healthy:'Healthy', warning:'Needs attention', critical:'Action needed', unavailable:'Unavailable'};
+const stateLabels = {healthy:'Healthy', warning:'Needs attention', critical:'Action needed', unavailable:'Unavailable', disabled:'Disabled', not_configured:'Not configured'};
+const historyMetrics = {
+  temperature: {label:'Temperature', unit:'°C', digits:1},
+  load: {label:'One-minute load', unit:'', digits:2},
+  memory: {label:'RAM use', unit:'%', digits:1},
+  swap: {label:'Swap use', unit:'%', digits:1},
+  hdd: {label:'External drive use', unit:'%', digits:1},
+  microsd: {label:'MicroSD use', unit:'%', digits:1},
+  container_memory: {label:'Portal memory', unit:'%', digits:1},
+  health_latency: {label:'Health response', unit:' ms', digits:0},
+  queue: {label:'Queue depth', unit:' jobs', digits:0},
+  backup: {label:'Backup state', unit:'', digits:0},
+};
+let historyGeneration = 0;
+let historyController = null;
 
 function prettyKey(key) {
   return key.replaceAll('_', ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
@@ -84,6 +98,7 @@ function createHealthCard(key, card) {
 function renderDatabases(databases) {
   const target = $('databaseList');
   target.replaceChildren();
+  $('databaseCount').textContent = `${databases.length} ${databases.length === 1 ? 'database' : 'databases'}`;
   let healthy = 0;
   databases.forEach((database) => {
     const row = document.createElement('article');
@@ -113,18 +128,29 @@ function renderClassicMetric(name, value, detail, percent, state) {
   $(`${name}Meter`).style.width = `${Math.max(0, Math.min(100, Number(percent) || 0))}%`;
 }
 
+function percentValue(value) {
+  return value === null || value === undefined ? '—' : `${value}%`;
+}
+
+function capacityDetail(used, total, unit, unavailable) {
+  if (used === null || used === undefined || total === null || total === undefined) return unavailable;
+  return `${used} of ${total} ${unit}`;
+}
+
 async function loadClassicOverview() {
   try {
     const response = await fetch('/api/status', {cache:'no-store'});
     const data = await response.json();
     if (!response.ok || !data.ok) throw new Error('unavailable');
     const states = data.health?.metrics || {};
-    renderClassicMetric('cpu', `${data.cpu}%`, `Load ${data.load1} · ${data.load5} · ${data.load15}`, data.cpu, states.cpu || 'unknown');
-    renderClassicMetric('memory', `${data.memory}%`, `${data.memory_used_gb} of ${data.memory_total_gb} GB used`, data.memory, states.memory || 'unknown');
-    renderClassicMetric('storage', `${data.disk_used}%`, `${data.disk_free_gb} GB free of ${data.disk_total_gb} GB`, data.disk_used, states.disk || 'unknown');
-    const uptimeDays = Math.floor((data.uptime || 0) / 86400);
-    const uptimeHours = Math.floor(((data.uptime || 0) % 86400) / 3600);
-    renderClassicMetric('temperature', data.temperature == null ? '—' : `${data.temperature}°C`, `Up for ${uptimeDays}d ${uptimeHours}h`, data.temperature == null ? 0 : data.temperature / 80 * 100, states.temperature || 'unknown');
+    const loadAvailable = [data.load1, data.load5, data.load15].every(value => value !== null && value !== undefined);
+    renderClassicMetric('cpu', percentValue(data.cpu), loadAvailable ? `Load ${data.load1} · ${data.load5} · ${data.load15}` : 'CPU and load readings unavailable', data.cpu, states.cpu || 'unknown');
+    renderClassicMetric('memory', percentValue(data.memory), capacityDetail(data.memory_used_gb, data.memory_total_gb, 'GB used', 'RAM reading unavailable'), data.memory, states.memory || 'unknown');
+    const storageDetail = data.disk_free_gb == null || data.disk_total_gb == null ? 'Storage reading unavailable' : `${data.disk_free_gb} GB free of ${data.disk_total_gb} GB`;
+    renderClassicMetric('storage', percentValue(data.disk_used), storageDetail, data.disk_used, states.disk || 'unknown');
+    const hostUptime = data.host_uptime ?? data.uptime;
+    const uptimeDetail = hostUptime == null ? 'Host uptime unavailable' : `Host up ${Math.floor(hostUptime / 86400)}d ${Math.floor((hostUptime % 86400) / 3600)}h`;
+    renderClassicMetric('temperature', data.temperature == null ? '—' : `${data.temperature}°C`, uptimeDetail, data.temperature == null ? 0 : data.temperature / 80 * 100, states.temperature || 'unknown');
     $('classicUpdated').textContent = `Updated ${new Date().toLocaleTimeString([], {hour:'numeric', minute:'2-digit'})}`;
   } catch (_) {
     ['cpu','memory','storage','temperature'].forEach((name) => {
@@ -142,11 +168,20 @@ async function loadSummary() {
     if (!response.ok || !data.ok) throw new Error('unavailable');
     const cards = $('healthCards');
     cards.replaceChildren(...Object.entries(data.subsystems).map(([key, card]) => createHealthCard(key, card)));
+    const attention = Object.entries(data.subsystems).filter(([, card]) => !['healthy','disabled','not_configured'].includes(card.state));
+    $('attentionPanel').hidden = !attention.length && !data.stale;
+    $('attentionItems').replaceChildren(...attention.map(([key, card]) => {
+      const item = document.createElement('li');
+      item.textContent = `${labels[key] || key}: ${card.summary}`;
+      return item;
+    }));
+    const recovery = data.subsystems.backups?.details?.independent_data_backup || {};
+    $('recoverySummary').textContent = `Local backup: ${prettyValue(recovery.last_success)}. Restore test: ${prettyValue(recovery.last_restoration_test)}. Free backup space: ${recovery.capacity?.free_gb ?? 'Unavailable'} GB. ${data.subsystems.backups?.details?.offsite_backup?.local_only_risk || ''}`;
     $('healthHero').dataset.state = data.state;
     $('overallPill').dataset.state = data.state;
     $('overallPill').querySelector('span').textContent = stateLabels[data.state] || stateLabels.unavailable;
     $('overallTitle').textContent = data.state === 'healthy' ? 'Everything looks good.'
-      : data.state === 'critical' ? 'David-Pi needs attention.'
+      : data.state === 'critical' ? `${window.davidPiServerName || 'Server'} needs attention.`
       : data.stale ? 'The latest snapshot is stale.'
       : 'A few things need watching.';
     const generated = new Date(data.generated_at);
@@ -161,11 +196,75 @@ async function loadSummary() {
   }
 }
 
-function drawHistory(points, metric) {
+function historyValue(value, metric) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return 'Unavailable';
+  if (metric === 'backup') return ['Healthy', 'Warning', 'Critical', 'Unavailable'][Math.round(numeric)] || 'Unavailable';
+  const info = historyMetrics[metric] || {unit:'', digits:1};
+  return `${numeric.toFixed(info.digits)}${info.unit}`;
+}
+
+function normalizedHistory(points) {
+  if (!Array.isArray(points)) return [];
+  return points.map((point) => ({timestamp:Number(point.timestamp), value:Number(point.value)}))
+    .filter((point) => Number.isFinite(point.timestamp) && Number.isFinite(point.value))
+    .sort((left, right) => left.timestamp - right.timestamp);
+}
+
+function boundedHistoryRows(points, maximum = 48) {
+  if (points.length <= maximum) return points;
+  const selected = [];
+  for (let index = 0; index < maximum; index += 1) {
+    selected.push(points[Math.round(index * (points.length - 1) / (maximum - 1))]);
+  }
+  return selected;
+}
+
+function renderHistoryDetails(points, metric, sampled = false) {
+  const info = historyMetrics[metric] || {label:prettyKey(metric)};
+  const rows = boundedHistoryRows(points);
+  $('historyRows').replaceChildren(...rows.map((point) => {
+    const row = document.createElement('tr');
+    const time = document.createElement('td');
+    const value = document.createElement('td');
+    time.textContent = new Date(point.timestamp * 1000).toLocaleString([], {dateStyle:'medium', timeStyle:'short'});
+    value.textContent = historyValue(point.value, metric);
+    row.append(time, value);
+    return row;
+  }));
+  $('historyCaption').textContent = `${info.label} readings${sampled ? ' (server-sampled)' : ''}`;
+  $('historyValuesSummary').textContent = points.length > rows.length
+    ? `View ${rows.length} representative values from ${points.length} readings`
+    : `View ${points.length} recorded ${points.length === 1 ? 'value' : 'values'}`;
+  if (!points.length) {
+    $('historySummary').textContent = `No ${info.label.toLowerCase()} readings are available for this range yet.`;
+    return;
+  }
+  const values = points.map((point) => point.value);
+  const first = points[0].value;
+  const last = points.at(-1).value;
+  const delta = last - first;
+  let direction = Math.abs(delta) < 0.001 ? 'held steady' : delta > 0 ? 'rose' : 'fell';
+  if (metric === 'backup' && Math.abs(delta) >= 0.001) direction = delta > 0 ? 'worsened' : 'improved';
+  $('historySummary').textContent = `${info.label} ${direction} from ${historyValue(first, metric)} to ${historyValue(last, metric)}. Range ${historyValue(Math.min(...values), metric)} to ${historyValue(Math.max(...values), metric)} across ${points.length} ${points.length === 1 ? 'reading' : 'readings'}.`;
+}
+
+function svgElement(name, attributes = {}, text = '') {
+  const element = document.createElementNS('http://www.w3.org/2000/svg', name);
+  Object.entries(attributes).forEach(([key, value]) => element.setAttribute(key, value));
+  if (text) element.textContent = text;
+  return element;
+}
+
+function drawHistory(rawPoints, metric, sampled = false) {
+  const points = normalizedHistory(rawPoints);
   const svg = $('historyChart');
   svg.replaceChildren();
+  renderHistoryDetails(points, metric, sampled);
   if (points.length < 2) {
     $('historyEmpty').hidden = false;
+    $('historyEmptyText').textContent = points.length ? 'One reading is available; a trend needs at least two.' : 'History will fill in every five minutes.';
+    $('historyRetry').hidden = true;
     return;
   }
   $('historyEmpty').hidden = true;
@@ -182,25 +281,49 @@ function drawHistory(points, metric) {
     const y = 225 - ((Number(point.value) - minimum) / (maximum - minimum)) * 190;
     return `${index ? 'L' : 'M'}${x.toFixed(1)},${y.toFixed(1)}`;
   }).join(' ');
-  svg.innerHTML = `<g class="grid-lines"><line x1="34" y1="35" x2="866" y2="35"/><line x1="34" y1="130" x2="866" y2="130"/><line x1="34" y1="225" x2="866" y2="225"/></g><g class="chart-labels"><text x="34" y="27">${maximum.toFixed(1)}</text><text x="34" y="252">${minimum.toFixed(1)}</text></g><path class="status-history-line" d="${pathData}"/>`;
+  const info = historyMetrics[metric] || {label:prettyKey(metric)};
+  const title = svgElement('title', {id:'historyChartTitle'}, `${info.label} history`);
+  const description = svgElement('desc', {id:'historyChartDescription'}, $('historySummary').textContent);
+  const grid = svgElement('g', {class:'grid-lines'});
+  [35, 130, 225].forEach((y) => grid.append(svgElement('line', {x1:34, y1:y, x2:866, y2:y})));
+  const chartLabels = svgElement('g', {class:'chart-labels'});
+  chartLabels.append(
+    svgElement('text', {x:34, y:27}, historyValue(maximum, metric)),
+    svgElement('text', {x:34, y:237}, historyValue(minimum, metric)),
+    svgElement('text', {x:34, y:255}, new Date(first * 1000).toLocaleDateString([], {month:'short', day:'numeric'})),
+    svgElement('text', {x:866, y:255, 'text-anchor':'end'}, new Date(last * 1000).toLocaleDateString([], {month:'short', day:'numeric'})),
+  );
+  svg.append(title, description, grid, chartLabels, svgElement('path', {class:'status-history-line', d:pathData}));
 }
 
 async function loadHistory() {
+  const generation = ++historyGeneration;
+  historyController?.abort();
+  historyController = new AbortController();
+  const metric = $('historyMetric').value;
+  const range = $('historyRange').value;
+  $('historySummary').textContent = `Loading ${(historyMetrics[metric]?.label || prettyKey(metric)).toLowerCase()} history…`;
+  $('historyRetry').hidden = true;
   try {
-    const metric = $('historyMetric').value;
-    const range = $('historyRange').value;
-    const response = await fetch(`/api/status/history?metric=${encodeURIComponent(metric)}&range=${encodeURIComponent(range)}`, {cache:'no-store'});
+    const response = await fetch(`/api/status/history?metric=${encodeURIComponent(metric)}&range=${encodeURIComponent(range)}`, {cache:'no-store', signal:historyController.signal});
     const data = await response.json();
     if (!response.ok) throw new Error('history');
-    drawHistory(data.points || [], metric);
-  } catch (_) {
+    if (generation !== historyGeneration) return;
+    drawHistory(data.points || [], metric, Boolean(data.sampled));
+  } catch (error) {
+    if (error.name === 'AbortError' || generation !== historyGeneration) return;
     $('historyEmpty').hidden = false;
-    $('historyEmpty').textContent = 'History is temporarily unavailable.';
+    $('historyEmptyText').textContent = 'History is temporarily unavailable.';
+    $('historyRetry').hidden = false;
+    $('historySummary').textContent = 'History could not be loaded. The rest of the status page is still available.';
+    $('historyRows').replaceChildren();
+    $('historyValuesSummary').textContent = 'No recorded values available';
   }
 }
 
 $('historyMetric').addEventListener('change', loadHistory);
 $('historyRange').addEventListener('change', loadHistory);
+$('historyRetry').addEventListener('click', loadHistory);
 
 const shutdownDialog = $('safeShutdownDialog');
 const shutdownForm = $('safeShutdownForm');
@@ -241,10 +364,10 @@ shutdownForm.addEventListener('submit', async (event) => {
       body: JSON.stringify({password: shutdownPassword.value}),
     });
     const data = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(data.error || 'David-Pi could not start a safe shutdown.');
+    if (!response.ok) throw new Error(data.error || 'The server could not start a safe shutdown.');
     closeShutdownDialog();
     $('safeShutdownPanel').dataset.accepted = 'true';
-    $('safeShutdownSummary').textContent = 'David-Pi is shutting down. Wait for its activity light to stop before removing power.';
+    $('safeShutdownSummary').textContent = 'The server is shutting down. Wait for its activity light to stop before removing power.';
     $('safeShutdownButton').hidden = true;
   } catch (error) {
     shutdownError.textContent = error.message;

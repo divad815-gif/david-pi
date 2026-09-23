@@ -26,15 +26,15 @@ if [[ "$TEST_MODE" != 1 ]]; then
   # shellcheck disable=SC1091
   source /etc/os-release
   case "${ID:-}:${VERSION_ID:-}" in
-    debian:12|debian:13|ubuntu:22.04|ubuntu:24.04) ;;
-    *) fail "supported hosts are Debian 12/13 and Ubuntu 22.04/24.04" ;;
+    debian:13|raspbian:13|ubuntu:24.04) ;;
+    *) fail "supported hosts are Debian 13 or Ubuntu 24.04 AMD64 and Raspberry Pi OS Debian 13 ARM64" ;;
   esac
   case "$(uname -m)" in x86_64|aarch64) ;; *) fail "only amd64 and arm64 are supported" ;; esac
   memory_kib="$(awk '/^MemTotal:/{print $2}' /proc/meminfo)"
   (( memory_kib >= 3670016 )) || fail "at least 3.5 GiB RAM is required"
   free_kib="$(df -Pk / | awk 'NR==2{print $4}')"
   (( free_kib >= 8388608 )) || fail "at least 8 GiB free space is required on the OS filesystem"
-  for command in curl sha256sum tar awk sed find; do
+  for command in curl sha256sum tar awk sed find python3; do
     command -v "$command" >/dev/null || fail "required command is missing: $command"
   done
 fi
@@ -87,7 +87,20 @@ while IFS= read -r member; do
 done < <(tar -tzf "$WORK/$ARCHIVE")
 
 mkdir -m 0700 "$WORK/extracted"
-tar -xzf "$WORK/$ARCHIVE" -C "$WORK/extracted" --no-same-owner --no-same-permissions
+python3 - "$WORK/$ARCHIVE" "$WORK/extracted" <<'PYARCHIVE'
+import pathlib,sys,tarfile
+with tarfile.open(sys.argv[1], 'r:gz') as bundle:
+    members=bundle.getmembers()
+    seen=set()
+    if len(members)>100000 or sum(m.size for m in members)>4*1024**3:
+        raise SystemExit('Release archive is too large')
+    for member in members:
+        path=pathlib.PurePosixPath(member.name)
+        if path.is_absolute() or '..' in path.parts or not (member.isfile() or member.isdir()) or member.name in seen:
+            raise SystemExit('Unsafe release archive member')
+        seen.add(member.name)
+    bundle.extractall(sys.argv[2],members=members,filter='data')
+PYARCHIVE
 ROOT="$WORK/extracted/david-pi-$VERSION"
 [[ -x "$ROOT/david-pi" && "$(tr -d '[:space:]' < "$ROOT/VERSION")" == "$VERSION" ]] || fail "release contents are incomplete"
 
@@ -120,6 +133,7 @@ chmod 0755 "$BOOTSTRAP_ROOT/david-pi"
 ln -sfn -- "$BOOTSTRAP_ROOT/david-pi" "$CLI_LINK"
 
 export DAVID_PI_IMAGE_OVERRIDE="$IMAGE"
+export DAVID_PI_REPOSITORY="$REPOSITORY"
 "$BOOTSTRAP_ROOT/david-pi" setup
 
 # On success dp_install_application has installed the final CLI and repointed

@@ -1,131 +1,74 @@
-# Guided installation
+# Install your private home server
 
-The installer supports 64-bit Raspberry Pi, Intel, and AMD hardware running a
-supported Debian or Ubuntu Server release. It is intentionally interactive and resumable. It
-does not format a disk, publish a public website, or disable password SSH
-without a separate, explicit safety step.
+This guide describes the portable 10.0.0 release. It remains an unpublished
+candidate until the [release gates](RELEASE.md) pass. Do not use an older public
+download as a test of this guide.
 
-## 1. Prepare a supported Linux host
+## 1. Prepare the machine
 
-Use Raspberry Pi OS Lite 64-bit, Debian 12/13, or Ubuntu Server 22.04/24.04.
-Choose a minimal, 64-bit installation with systemd. Set a unique administrator
-username, strong temporary password, hostname, locale, and network connection.
-Enable SSH. There is no David-Pi default credential.
+Use 64-bit Raspberry Pi OS based on Debian 13 on a Pi 4/5, Debian 13 AMD64, or
+Ubuntu Server 24.04 LTS AMD64. Start with a supported native installation;
+Windows, WSL, macOS, network filesystems and 32-bit machines are not targets.
+Use your own Linux administrator account. There is no shared default password.
+If you need SSH, enable it using the OS instructions and retain a working local
+or SSH session until the portal is verified.
 
-Boot the server, sign in once, and update its package metadata:
+Have 4 GB memory and 8 GiB free OS space. Store large libraries on a prepared
+ext4 drive when possible. Plug in the data drive before setup. The installer
+will not format or repartition it. [Prepare storage first](STORAGE.md).
 
-```bash
-sudo apt update
-sudo apt full-upgrade
-sudo reboot
+## 2. Connect the setup device
+
+Install Tailscale on the computer or phone you will use for the wizard. Sign in
+to your own account. The server must join that same network. Review
+[Tailscale setup](TAILSCALE.md) before inviting household members.
+
+![Private setup sequence](images/setup-flow.svg)
+
+## 3. Run the verified bootstrap
+
+Once this stable release is published:
+
+```sh
+curl -fsSL https://github.com/divad815-gif/david-pi/releases/latest/download/install.sh | sudo bash
 ```
 
-Reconnect after the reboot. Before starting the installer, enroll an SSH
-public key and prove it works in a second terminal. Keep the first terminal
-open.
+For inspection first, download `install.sh` and `install.sh.sha256` from the
+same stable GitHub release, run `sha256sum -c install.sh.sha256`, read the script,
+then run `sudo bash install.sh`. The checksum confirms download integrity; the
+release publisher and HTTPS channel remain part of the trust model.
 
-## 2. Obtain and verify a release
+The bootstrap checks the OS, CPU, memory, storage and occupied ports. It installs
+missing prerequisites from official package sources and asks for the intended administrator login and a suggested hostname.
+It shows the Tailscale login link when sign-in is required. It inspects existing Serve configuration
+and stops on conflicts instead of replacing another private website.
 
-The recommended bootstrap is one command after the supported OS exists:
+## 4. Complete the browser wizard
 
-```bash
-sudo apt-get update &&
-sudo apt-get install -y ca-certificates curl &&
-curl -fsSL https://github.com/divad815-gif/david-pi/releases/latest/download/install.sh |
-sudo bash
-```
+1. Open the printed private HTTPS setup link from your Tailscale-connected device.
+2. Claim the server using the short-lived, single-use claim token. The identity
+   must match the intended administrator chosen during terminal setup. Do not
+   forward this link or token.
+3. Enter the website display name, for example **John’s home**. The terminal
+   already suggested a hostname such as **john-pi** before creating HTTPS.
+   A hostname collision may add a suffix; keep the actual address shown.
+4. Choose a prepared local ext4 folder/drive. The wizard creates its own
+   application directory. Existing unrelated files remain untouched.
+5. Select modules. Phone Backup also enables Media. Skip modules you do not need;
+   you can enable them later without losing previously saved content.
+6. Configure optional providers or choose **Skip**. Local recipes, watchlists,
+   text chat and uploaded chat images need no provider account.
+7. Choose your timezone, movie country, and optional independent backup location.
+8. Run the final verification. Save the displayed private address. Add a
+   household member only after your own account can open the portal.
 
-The bootstrap checks native Linux/systemd, distribution, architecture, memory,
-and free space before installation. It downloads `release-manifest.txt` and the
-matching archive into a mode-0700 temporary directory, validates the archive
-SHA-256 before extraction, and passes the release's immutable GHCR image digest
-to setup. Temporary downloads are removed whether setup succeeds or fails.
+The portal runs on loopback and Tailscale supplies HTTPS. Nothing is exposed
+through Funnel. Keep the local terminal available until installation succeeds.
 
-People who do not want to pipe a remote script into `sudo` should download
-`install.sh` and `install.sh.sha256`, run `sha256sum -c`, inspect the script, and
-then execute `sudo bash install.sh`.
+## If setup stops
 
-`david-pi preflight` is read-only. `setup` records completed phases in
-`/etc/david-pi/install-state.env`; rerunning it resumes after the last completed
-phase.
-
-## 3. Answer the wizard
-
-The wizard asks for:
-
-- the existing Linux administrator, hostname, and user-visible instance name;
-- confirmation of detected Pi, laptop, or generic-server capabilities;
-- permission to apply dedicated-server lid/suspend policy when a laptop is detected;
-- a storage profile: OS-disk trial, dedicated primary, dedicated primary plus a
-  physically separate backup, or restore;
-- optional Pi-hole, exit-node advertisement, TMDB, GIF search, and Windows
-  Assistant bridge features;
-- a private website safe-shutdown password, which is stored only as a hash.
-
-Container memory and CPU limits are generated from detected host resources,
-while reserving capacity for Linux, SSH, Tailscale, Pi-hole, and filesystem
-caching. Disk discovery prints device, capacity, filesystem, model, transport, and
-mount information. Confirm model and capacity physically before selecting a
-device. Existing data disks must already be ext4. A disk without a filesystem
-is rejected, with instructions to run the separate destructive command:
-
-```bash
-sudo david-pi prepare-storage
-```
-
-That command refuses the OS disk and mounted disks, and requires typing the
-exact device confirmation. It is never called automatically by `setup`.
-
-The production Compose file pulls the exact image digest recorded in the
-release manifest. It does not build on the server. Developers can build from a
-checked-out source tree with the separate `compose.dev.yaml` override.
-
-## 4. Tailscale and SSH safety gates
-
-Tailscale displays its own private login URL. Approve the Pi in the intended
-tailnet. The installer configures private Serve to `127.0.0.1:8090`, verifies
-Funnel is off, and never edits the tailnet ACL/grants document.
-
-Before password SSH is disabled, the installer requires at least one enrolled
-public key and asks you to prove a second key-authenticated session is open. A
-five-minute automatic rollback is armed before reloading SSH. Failed syntax or
-failed confirmation restores the prior configuration.
-
-## 5. Verification
-
-At completion run:
-
-```bash
-sudo david-pi status
-sudo david-pi verify
-sudo david-pi backup
-sudo david-pi restore-test
-```
-
-Verification checks the storage mount and sentinel, container health and UID,
-zero effective capabilities, read-only root, loopback-only publication,
-Tailscale Serve/Funnel state, Pi-hole binding when selected, physical backup
-independence, absence of `.env` in the image, and absence of the Docker socket.
-
-The full installation report is root-readable at
-`/etc/david-pi/INSTALLATION_REPORT.md`.
-
-## What remains manual
-
-- Tailnet ACL/grants policy and device/user membership
-- Router DNS, port-forwarding, UPnP, DMZ, and inbound IPv6 review
-- A LAN-only test with Tailscale disconnected
-- API account creation and token rotation
-- A real restore drill
-- UPS shutdown integration specific to the UPS model
-
-## Supported-host boundaries
-
-- Native Linux with systemd is required.
-- `amd64/x86_64` and `arm64/aarch64` are supported.
-- Windows, WSL, Docker Desktop, macOS, 32-bit systems, and non-systemd Linux
-  distributions are not production targets in this release.
-- The installer accepts internal SATA/NVMe disks and external USB disks. The
-  same UUID, sentinel, and physical-backup-independence checks apply to both.
-- The active data filesystem remains ext4 for predictable Linux permissions,
-  atomic replacement, and recovery behavior.
+Read the specific failure shown before retrying. Correct the disk, port,
+Tailscale or credential issue and run `sudo david-pi setup` again. Setup is
+resumable. An expired claim requires a new terminal-generated token; refreshing
+an old link does not grant ownership. Never delete installation configuration to
+work around an account problem. See [troubleshooting](TROUBLESHOOTING.md).

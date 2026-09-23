@@ -1,94 +1,88 @@
+{%- set davidpi_theme = 'dark' if request is defined and request.cookies.get('davidPiThemeV1') == 'dark' else 'light' -%}
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="{{ davidpi_theme }}">
 <head>
+  <meta name="server-name" content="{{ server_name }}">
+  <script type="application/json" id="installation-config">{{ public_installation|tojson }}</script>
+  <script src="/static/installation.js?v=2"></script>
+  <meta name="audiobook-progress-scope" content="{{ audiobook_progress_scope }}">
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=auto">
   <meta name="theme-color" content="#fffaf2">
+  <meta name="color-scheme" content="{{ davidpi_theme }}">
+  <script src="/static/theme-bootstrap.js?v=8"></script>
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-title" content="David-Pi">
-  <title>David-Pi</title>
+  <meta name="apple-mobile-web-app-title" content="{{ server_name }}">
+  <title>{{ server_name }}</title>
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" type="image/png" sizes="32x32" href="/david-pi-icon-32.png">
   <link rel="apple-touch-icon" sizes="180x180" href="/david-pi-icon-180.png">
-  <link rel="stylesheet" href="/static/app.css?v=11">
+  <link rel="stylesheet" href="/static/app.css?v=40">
+  <link rel="stylesheet" href="/static/home-dashboard.css?v=3">
+  <link rel="stylesheet" href="/static/david-pi-ui.css?v=16">
 </head>
-<body class="home-page">
-  <main class="shell">
+<body class="home-page" data-recent-scope="{{ home_recent_scope }}">
+  <a class="home-skip-link" href="#moduleDirectory">Skip to apps</a>
+  <main class="shell home-dashboard-shell">
     <header class="welcome">
       <div class="brand-lockup">
         <span class="david-mark" aria-hidden="true"><i></i></span>
-        <div><p class="brand-name">DAVID-PI</p><p class="home-health" id="homeHealth" data-health="unknown"><i></i> Checking in&hellip;</p></div>
+        <div><p class="brand-name">{{ server_name }}</p><p class="home-health" id="homeHealth" data-health="unknown"><i></i> Checking in&hellip;</p></div>
       </div>
       <h1>Welcome home.</h1>
       <p class="intro">Photos, videos, and files, kept safely at home and available wherever you are.</p>
+      <a id="homeAttention" href="/status" hidden>Review what needs attention →</a>
     </header>
 
-    <section class="actions" aria-label="What would you like to do?">
-      <a class="action action-primary" href="/photos">
-        <span class="action-icon" aria-hidden="true">▦</span>
-        <span><strong>Media</strong><small>Enjoy your photos and videos</small></span>
-        <span class="arrow" aria-hidden="true">→</span>
-      </a>
-      <a class="action" href="/assistant">
-        <span class="action-icon assistant-icon" aria-hidden="true"><i></i></span>
-        <span><strong>Assistant</strong><small>Ask about media and server health</small></span>
-        <span class="arrow" aria-hidden="true">→</span>
-      </a>
-      <a class="action" href="/chat">
-        <span class="action-icon assistant-icon" aria-hidden="true"><i></i></span>
-        <span><strong>Chat</strong><small>Private messages, photos, emojis, and GIFs</small></span>
-        <span class="arrow" aria-hidden="true">&rarr;</span>
-      </a>
-      <a class="action" href="/notes">
-        <span class="action-icon" aria-hidden="true">✎</span>
-        <span><strong>Notes</strong><small>Keep ideas, lists, and reminders together</small></span>
-        <span class="arrow" aria-hidden="true">&rarr;</span>
-      </a>
-      <a class="action" href="/movies">
-        <span class="action-icon" aria-hidden="true">▶</span>
-        <span><strong>Movie Night</strong><small>See what’s ready to watch</small></span>
-        <span class="arrow" aria-hidden="true">&rarr;</span>
-      </a>
-      <a class="action" href="/games">
-        <span class="action-icon" aria-hidden="true">♠</span>
-        <span><strong>Games</strong><small>Chess, checkers, cards, and puzzles</small></span>
-        <span class="arrow" aria-hidden="true">&rarr;</span>
-      </a>
-      <a class="action" href="/recipes">
-        <span class="action-icon" aria-hidden="true">⌁</span>
-        <span><strong>Recipes</strong><small>Find something good to make</small></span>
-        <span class="arrow" aria-hidden="true">&rarr;</span>
-      </a>
-      <a class="action" href="/places">
-        <span class="action-icon" aria-hidden="true">&#9733;</span>
-        <span><strong>Date Night</strong><small>Restaurants to try and favorites to remember</small></span>
-        <span class="arrow" aria-hidden="true">&rarr;</span>
-      </a>
-      <a class="action" href="/files">
-        <span class="action-icon" aria-hidden="true">⌑</span>
-        <span><strong>Files</strong><small>Documents and personal storage</small></span>
-        <span class="arrow" aria-hidden="true">→</span>
-      </a>
-      <a class="action" href="/audiobooks">
-        <span class="action-icon" aria-hidden="true">&#9835;</span>
-        <span><strong>Audiobooks</strong><small>Listen and pick up where you left off</small></span>
-        <span class="arrow" aria-hidden="true">&rarr;</span>
-      </a>
-      <a class="action" href="/status">
-        <span class="action-icon status-icon" aria-hidden="true"><i></i></span>
-        <span><strong>Server status</strong><small>Pi health, history, and Pi-hole</small></span>
-        <span class="arrow" aria-hidden="true">&rarr;</span>
-      </a>
-      <a class="action" href="/device-backup">
-        <span class="action-icon" aria-hidden="true">↥</span>
-        <span><strong>Phone backup</strong><small>Send phone originals safely home</small></span>
-        <span class="arrow" aria-hidden="true">&rarr;</span>
-      </a>
+    <section class="home-recent" id="homeRecent" aria-labelledby="homeRecentTitle" hidden>
+      <div class="home-section-heading home-recent-heading">
+        <div><p class="sheet-kicker">Continue</p><h2 id="homeRecentTitle">Recent apps</h2></div>
+        <button class="home-clear-recent" id="homeClearRecent" type="button">Clear all</button>
+      </div>
+      <ul class="home-recent-grid" id="homeRecentGrid"></ul>
+    </section>
+    <p class="visually-hidden" id="homeRecentStatus" role="status" aria-live="polite"></p>
+
+    <section class="home-directory" id="moduleDirectory" aria-labelledby="moduleDirectoryTitle">
+      <div class="home-section-heading"><div><p class="sheet-kicker">Everything at home</p><h2 id="moduleDirectoryTitle" tabindex="-1">Apps</h2></div><p>Organized by what you’re here to do.</p></div>
+      <div class="home-directory-grid">
+        <section class="home-group home-group-library" aria-labelledby="libraryTitle">
+          <header><h3 id="libraryTitle">Library</h3><p>Your media, reading, documents, and ideas.</p></header>
+          <div class="actions">
+{% if module_enabled("media") %}            <a class="action action-primary" href="/photos" data-module><span class="action-icon" aria-hidden="true">▦</span><span><strong>Media</strong><small>Enjoy your photos and videos</small></span><span class="arrow" aria-hidden="true">→</span></a>{% endif %}
+{% if module_enabled("mytube") %}            <a class="action" href="/mytube" data-module><span class="action-icon" aria-hidden="true">▶</span><span><strong>MyTube</strong><small>Your private, full-size video library</small></span><span class="arrow" aria-hidden="true">→</span></a>{% endif %}
+{% if module_enabled("audiobooks") %}            <a class="action" href="/audiobooks" data-module><span class="action-icon" aria-hidden="true">&#9835;</span><span><strong>Audiobooks</strong><small>Listen and pick up where you left off</small></span><span class="arrow" aria-hidden="true">&rarr;</span></a>{% endif %}
+{% if module_enabled("files") %}            <a class="action" href="/files" data-module><span class="action-icon" aria-hidden="true">⌑</span><span><strong>Files</strong><small>Documents and personal storage</small></span><span class="arrow" aria-hidden="true">→</span></a>{% endif %}
+{% if module_enabled("notes") %}            <a class="action" href="/notes" data-module><span class="action-icon" aria-hidden="true">✎</span><span><strong>Notes</strong><small>Keep ideas, lists, and reminders together</small></span><span class="arrow" aria-hidden="true">&rarr;</span></a>{% endif %}
+{% if module_enabled("recipes") %}            <a class="action" href="/recipes" data-module><span class="action-icon" aria-hidden="true">⌁</span><span><strong>Recipes</strong><small>Find something good to make</small></span><span class="arrow" aria-hidden="true">&rarr;</span></a>{% endif %}
+          </div>
+        </section>
+        <section class="home-group" aria-labelledby="togetherTitle">
+          <header><h3 id="togetherTitle">Together</h3><p>Connect, choose, play, and go out.</p></header>
+          <div class="actions">
+{% if module_enabled("chat") %}            <a class="action" href="/chat" data-module><span class="action-icon assistant-icon" aria-hidden="true"><i></i></span><span><strong>Chat</strong><small>Private household messages</small></span><span class="arrow" aria-hidden="true">&rarr;</span></a>{% endif %}
+{% if module_enabled("movies") %}            <a class="action" href="/movies" data-module><span class="action-icon" aria-hidden="true">▶</span><span><strong>Movie Night</strong><small>See what’s ready to watch</small></span><span class="arrow" aria-hidden="true">&rarr;</span></a>{% endif %}
+{% if module_enabled("places") %}            <a class="action" href="/places" data-module><span class="action-icon" aria-hidden="true">&#9733;</span><span><strong>Date Night</strong><small>Restaurants to try and remember</small></span><span class="arrow" aria-hidden="true">&rarr;</span></a>{% endif %}
+{% if module_enabled("games") %}            <a class="action" href="/games" data-module><span class="action-icon" aria-hidden="true">♠</span><span><strong>Games</strong><small>Chess, cards, and puzzles</small></span><span class="arrow" aria-hidden="true">&rarr;</span></a>{% endif %}
+          </div>
+        </section>
+        <section class="home-group" aria-labelledby="systemTitle">
+          <header><h3 id="systemTitle">System</h3><p>Help, health, and protected backup.</p></header>
+          <div class="actions">
+{% if module_enabled("assistant") %}            <a class="action" href="/assistant" data-module><span class="action-icon assistant-icon" aria-hidden="true"><i></i></span><span><strong>Assistant</strong><small>Ask about media and server health</small></span><span class="arrow" aria-hidden="true">→</span></a>{% endif %}
+            <a class="action" href="/status" data-module><span class="action-icon status-icon" aria-hidden="true"><i></i></span><span><strong>Server status</strong><small>Health, history, and Pi-hole</small></span><span class="arrow" aria-hidden="true">&rarr;</span></a>
+{% if module_enabled("device_backup") %}            <a class="action" href="/device-backup" data-module><span class="action-icon" aria-hidden="true">↥</span><span><strong>Phone backup</strong><small>Send phone originals safely home</small></span><span class="arrow" aria-hidden="true">&rarr;</span></a>{% endif %}
+          </div>
+        </section>
+      </div>
     </section>
 
-    <p class="privacy-note"><span aria-hidden="true">●</span> Available only on your private home network.</p>
+    {% if public_installation.is_admin %}<p><a class="secondary-button" href="/settings">Manage this server</a></p>{% endif %}
+    <p><a href="/connect">Connect the Android app</a></p>
+    <p class="privacy-note"><span aria-hidden="true">●</span> Available through your private Tailscale network.</p>
   </main>
-  <script src="/static/home.js?v=1" defer></script>
+  <script src="/static/david-pi-ui.js?v=15" defer></script>
+  <script src="/static/home.js?v=6" defer></script>
   <script>if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js');</script>
 </body>
 </html>

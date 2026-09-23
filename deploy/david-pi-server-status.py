@@ -6,13 +6,24 @@ from __future__ import annotations
 import datetime as dt
 import json
 import os
-import platform
 from pathlib import Path
+import re
 import shutil
 import sqlite3
 import subprocess
+import sys
 import tempfile
 import time
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from david_pi_restore_receipt import (
+    DEFAULT_MAX_AGE_SECONDS as RESTORE_EVIDENCE_MAX_AGE_SECONDS,
+    ReceiptBindingError,
+    ReceiptStaleError,
+    read_restore_receipt,
+    verify_restore_receipt,
+)
+from david_pi_snapshot_manifest import load_signing_key
 
 
 OUTPUT = Path("/run/david-pi/server-status.json")
@@ -26,6 +37,25 @@ INDEPENDENT_BACKUP = Path("/srv/backup-data")
 INDEPENDENT_BACKUP_STATUS = INDEPENDENT_BACKUP / "last-success.json"
 INDEPENDENT_BACKUP_SENTINEL = INDEPENDENT_BACKUP / ".david-pi-backup-storage"
 INDEPENDENT_BACKUP_SENTINEL_VALUE = "david-pi-independent-backup-v1"
+B2_BACKUP_STATUS = Path("/var/lib/david-pi-b2-backup/status.json")
+OFFSITE_REQUIRED = os.environ.get("DAVID_PI_OFFSITE_REQUIRED", "false").lower() == "true"
+UPDATE_SUCCESS = Path("/var/lib/apt/periodic/update-stamp")
+REBOOT_REQUIRED = Path("/var/run/reboot-required")
+RESTORE_EVIDENCE = Path("/var/lib/david-pi-recovery/latest-restore-evidence.json")
+RESTORE_EVIDENCE_KEY_ENV = "DAVID_PI_RESTORE_EVIDENCE_KEY_FILE"
+ACCESS_CONTAINER = "family-photo-portal"
+ACCESS_MODE_LABEL = "com.david-pi.access-mode"
+ACCESS_MODES = frozenset({"off", "shadow", "enforce"})
+ACCESS_COUNTER_WINDOW_HOURS = 24
+ACCESS_COUNTER_LINE_LIMIT = 5000
+ACCESS_COUNTER_OUTPUT_LIMIT = 1024 * 1024
+ACCESS_COUNTER_PATTERN = re.compile(
+    r"(?:^|\s)david_pi_access_counter "
+    r"mode=(off|shadow|enforce) "
+    r"disposition=(blocked|shadow|unenforced)\s*\Z"
+)
+AUDIOBOOK_QUEUE = DATA / ".david-pi-operations/audiobook/playback-queue.db"
+LEGACY_AUDIOBOOK_QUEUE = DATA / "audiobooks/playback-queue.db"
 EXPECTED_DATABASES = (
     DATA / "photos.db", DATA / "metrics.db", DATA / "platform/notes.db",
     DATA / "platform/movies.db", DATA / "platform/recipes.db",
@@ -34,6 +64,7 @@ EXPECTED_DATABASES = (
     DATA / "platform/places.db",
     DATA / "platform/audiobooks.db",
     DATA / "platform/chat.db",
+    AUDIOBOOK_QUEUE,
 )
 SERVICES = (
     "david-pi-portal.service", "docker.service", "tailscaled.service", "ssh.service",
@@ -46,30 +77,41 @@ SERVICES = (
 STATE_RANK = {"healthy": 0, "unavailable": 1, "warning": 2, "critical": 3}
 
 
-def platform_profile() -> str:
-    try:
-        model = Path("/proc/device-tree/model").read_bytes().replace(b"\0", b"").decode("utf-8", "ignore")
-    except OSError:
-        model = ""
-    if "Raspberry Pi" in model:
-        return "raspberry-pi"
-    if any(Path("/sys/class/power_supply").glob("BAT*")):
-        return "linux-laptop"
-    return "linux-server"
-
-
 def now_iso() -> str:
     return dt.datetime.now(dt.timezone.utc).isoformat()
 
 
-def command(arguments: list[str], timeout: int = 5, limit: int = 65536) -> tuple[bool, str]:
+def expected_databases() -> tuple[Path, ...]:
+    """Use the isolated queue, with a non-destructive first-boot fallback."""
+    if AUDIOBOOK_QUEUE.exists() or not LEGACY_AUDIOBOOK_QUEUE.exists():
+        return EXPECTED_DATABASES
+    return tuple(
+        LEGACY_AUDIOBOOK_QUEUE if path == AUDIOBOOK_QUEUE else path
+        for path in EXPECTED_DATABASES
+    )
+
+
+def command(
+    arguments: list[str],
+    timeout: int = 5,
+    limit: int = 65536,
+    include_stderr: bool = False,
+) -> tuple[bool, str]:
     """Run one fixed command with bounded time and output."""
     try:
         result = subprocess.run(
             arguments, capture_output=True, text=True, timeout=timeout,
             check=False, env={"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C"},
         )
-        output = (result.stdout or "")[:limit]
+        output = result.stdout or ""
+        if include_stderr and result.stderr:
+            # Docker attaches a container's stderr log stream to the command's
+            # stderr.  This remains bounded before callers parse only fixed,
+            # content-neutral evidence records.
+            if output and not output.endswith("\n"):
+                output += "\n"
+            output += result.stderr
+        output = output[:limit]
         return result.returncode == 0, output
     except (OSError, subprocess.TimeoutExpired):
         return False, ""
@@ -100,13 +142,95 @@ def age_hours(value: str | None) -> float | None:
         return None
 
 
+def credential_path(configured: str, environment=os.environ) -> Path:
+    """Resolve only an absolute path or one systemd credential basename."""
+    path = Path(configured)
+    if path.is_absolute():
+        return path
+    if path.name != configured or configured in {"", ".", ".."}:
+        raise ValueError("credential name is invalid")
+    directory = str(environment.get("CREDENTIALS_DIRECTORY", "")).strip()
+    if not directory:
+        raise ValueError("credential directory is unavailable")
+    return Path(directory) / configured
+
+
+def restore_evidence_summary(independent: dict, environment=os.environ) -> dict:
+    """Verify the private receipt and return only content-neutral status facts."""
+    summary = {
+        "configured": False,
+        "state": "unconfigured",
+        "scope": "isolated_data_restore",
+        "last_verified": None,
+        "age_hours": None,
+        "current_snapshot_match": False,
+        "network_isolation_verified": False,
+        "application_boot_verified": False,
+        "disaster_recovery_complete": False,
+    }
+    configured_key = str(environment.get(RESTORE_EVIDENCE_KEY_ENV, "")).strip()
+    if not configured_key:
+        return summary
+    summary["configured"] = True
+    snapshot_id = independent.get("snapshot")
+    manifest_digest = independent.get("manifest_sha256")
+    if not isinstance(snapshot_id, str) or not isinstance(manifest_digest, str):
+        summary["state"] = "backup_binding_unavailable"
+        return summary
+    try:
+        key = load_signing_key(credential_path(configured_key, environment))
+        document = read_restore_receipt(RESTORE_EVIDENCE)
+        receipt = verify_restore_receipt(
+            document,
+            key,
+            expected_snapshot_id=snapshot_id,
+            expected_manifest_sha256=manifest_digest,
+            max_age_seconds=RESTORE_EVIDENCE_MAX_AGE_SECONDS,
+        )
+    except ReceiptStaleError:
+        summary["state"] = "stale"
+        return summary
+    except ReceiptBindingError:
+        # An old but authentic receipt must never be replayed as proof for the
+        # currently advertised signed snapshot.
+        summary["state"] = "snapshot_mismatch"
+        return summary
+    except (OSError, RuntimeError, ValueError):
+        summary["state"] = "invalid_or_unavailable"
+        return summary
+    summary.update(
+        {
+            "state": "isolated_data_verified",
+            "last_verified": receipt["issued_at"],
+            "age_hours": age_hours(receipt["issued_at"]),
+            "current_snapshot_match": True,
+            "network_isolation_verified": True,
+            # Schema v1 explicitly cannot assert either of these stronger
+            # outcomes.  Keep them visible so data verification cannot become
+            # a false-green disaster-recovery result.
+            "application_boot_verified": False,
+            "disaster_recovery_complete": False,
+        }
+    )
+    return summary
+
+
+def file_mtime(path: Path) -> str | None:
+    """Return a file timestamp without reading its potentially sensitive contents."""
+    try:
+        return dt.datetime.fromtimestamp(path.stat().st_mtime, dt.timezone.utc).isoformat()
+    except OSError:
+        return None
+
+
 def disk_details(path: Path) -> dict:
     usage = shutil.disk_usage(path)
     return {
         "total_gb": round(usage.total / 1073741824, 1),
         "used_gb": round(usage.used / 1073741824, 1),
         "free_gb": round(usage.free / 1073741824, 1),
-        "used_percent": round(100 * usage.used / max(usage.total, 1), 1),
+        # Match df: reserved filesystem blocks are not available to applications.
+        "used_percent": round(100 * usage.used / max(usage.used + usage.free, 1), 1),
     }
 
 
@@ -129,6 +253,15 @@ def directory_size(path: Path) -> int:
 
 def size_gb(path: Path) -> float:
     return round(directory_size(path) / 1073741824, 3)
+
+
+def host_uptime_seconds(path: Path = Path("/proc/uptime")) -> int | None:
+    """Read host uptime without exposing process or user details."""
+    try:
+        value = float(path.read_text(encoding="utf-8").split()[0])
+        return int(value) if value >= 0 else None
+    except (OSError, IndexError, TypeError, ValueError):
+        return None
 
 
 def portal_card() -> dict:
@@ -167,7 +300,16 @@ def portal_card() -> dict:
             pass
     root_user = user in ("", "0", "0:0", "root")
     sentinel_ok = SENTINEL.is_file() and SENTINEL.read_text(encoding="utf-8").strip() == SENTINEL_VALUE
-    restart_count = int(restarts or 0)
+    try:
+        restart_count = int(restarts or 0)
+        memory_limit_bytes = int(memory_limit or 0)
+        pid_limit = int(pids_limit or 0)
+    except ValueError:
+        restart_count = 0
+        memory_limit_bytes = 0
+        pid_limit = 0
+    resource_limits_enforced = memory_limit_bytes > 0 and pid_limit > 0
+    telemetry_available = bool(stats_ok and stats)
     status = "healthy"
     code = "PORTAL_HEALTHY"
     summary = "The household portal is healthy."
@@ -175,6 +317,10 @@ def portal_card() -> dict:
         status, code, summary = "critical", "PORTAL_INVARIANT_FAILED", "The portal failed a safety or health check."
     elif restart_count >= 3:
         status, code, summary = "warning", "PORTAL_RESTARTS", "The portal is running but has restarted repeatedly."
+    elif not resource_limits_enforced:
+        status, code, summary = "warning", "PORTAL_LIMITS_UNENFORCED", "The portal is healthy, but resource limits are not confirmed."
+    elif not telemetry_available:
+        status, code, summary = "warning", "PORTAL_TELEMETRY_UNAVAILABLE", "The portal is healthy, but live resource readings are unavailable."
     return card(status, summary, {
         "container_health": health, "image": image, "uptime_seconds": uptime,
         "restart_count": restart_count, "health_latency_ms": latency_ms,
@@ -182,7 +328,9 @@ def portal_card() -> dict:
         "memory_percent": stats.get("MemPerc", "Unavailable"),
         "cpu_percent": stats.get("CPUPerc", "Unavailable"),
         "pid_usage": stats.get("PIDs", "Unavailable"),
-        "memory_limit_bytes": int(memory_limit or 0), "pid_limit": int(pids_limit or 0),
+        "memory_limit_bytes": memory_limit_bytes, "pid_limit": pid_limit,
+        "resource_limits_enforced": resource_limits_enforced,
+        "resource_telemetry_available": telemetry_available,
         "expected_uid": "10001", "running_user": user, "storage_sentinel": sentinel_ok,
     }, "" if status == "healthy" else "Open the details and check the failed invariant.", code)
 
@@ -210,15 +358,6 @@ def drive_card() -> dict:
     except OSError:
         pass
     sentinel_ok = SENTINEL.is_file() and SENTINEL.read_text(encoding="utf-8").strip() == SENTINEL_VALUE
-    source = str(record.get("source") or "")
-    transport = "unavailable"
-    physical_device = ""
-    if source.startswith("/dev/"):
-        parent_ok, parent = command(["lsblk", "-ndo", "PKNAME", source])
-        physical_device = f"/dev/{parent.strip()}" if parent_ok and parent.strip() else source
-        transport_ok, transport_raw = command(["lsblk", "-ndo", "TRAN", physical_device])
-        if transport_ok and transport_raw.strip():
-            transport = transport_raw.strip().lower()
     usb_ok, usb = command(["lsusb", "-t"])
     uas = "Driver=uas" in usb
     usb3 = any(speed in usb for speed in ("5000M", "10000M", "20000M"))
@@ -226,37 +365,25 @@ def drive_card() -> dict:
     lowered = kernel.lower() if kernel_ok else ""
     errors = sum(lowered.count(term) for term in ("i/o error", "buffer i/o", "ext4-fs error"))
     resets = lowered.count("reset superspeed usb") + lowered.count("usb disconnect")
-    smart = "unavailable"
-    if physical_device:
-        smart_ok, smart_raw = command(["smartctl", "-H", physical_device], timeout=8, limit=16384)
-        lowered_smart = smart_raw.lower()
-        if smart_ok and any(term in lowered_smart for term in ("passed", "ok")):
-            smart = "healthy"
-        elif smart_raw and any(term in lowered_smart for term in ("failed", "failing")):
-            smart = "warning"
-    status, code, summary = "healthy", "DRIVE_HEALTHY", "The data drive is mounted correctly."
+    status, code, summary = "healthy", "DRIVE_HEALTHY", "The external data drive is mounted correctly."
     if not mounted or filesystem != "ext4" or not writable or not sentinel_ok or errors:
-        status, code, summary = "critical", "DRIVE_INVARIANT_FAILED", "The data drive needs attention."
-    elif smart == "warning":
-        status, code, summary = "warning", "DRIVE_SMART_WARNING", "The data drive reported a health warning."
-    elif transport == "usb" and resets:
+        status, code, summary = "critical", "DRIVE_INVARIANT_FAILED", "The external data drive needs attention."
+    elif resets:
         status, code, summary = "warning", "DRIVE_USB_WARNING", "The drive is mounted, with a USB warning to review."
-    elif transport == "usb" and usb3 and not uas:
-        summary = "The data drive is healthy over USB 3; UAS is unavailable through this adapter."
+    elif usb3 and not uas:
+        summary = "The external data drive is healthy over USB 3; UAS and SMART are unavailable through this adapter."
     return card(status, summary, {
         "mounted": mounted, "source": record.get("source", "Unavailable"),
         "uuid": record.get("uuid", "Unavailable"), "filesystem": filesystem or "Unavailable",
-        "read_write": writable, "sentinel_valid": sentinel_ok, "transport": transport,
-        "usb3": usb3 if transport == "usb" else None,
-        "usb3_uas": uas if transport == "usb" else None,
+        "read_write": writable, "sentinel_valid": sentinel_ok, "usb3": usb3, "usb3_uas": uas,
         "recent_usb_resets": resets, "recent_io_or_filesystem_errors": errors,
-        "smart": smart,
+        "smart": "unavailable",
     }, "" if status == "healthy" else "Check the drive connection and system log.", code)
 
 
 def storage_card() -> dict:
     external = disk_details(Path("/srv/data"))
-    os_disk = disk_details(Path("/"))
+    microsd = disk_details(Path("/"))
     categories = {
         "originals_gb": size_gb(DATA / "originals"),
         "generated_videos_gb": size_gb(DATA / "previews"),
@@ -265,7 +392,7 @@ def storage_card() -> dict:
         "pdf_cache_gb": size_gb(DATA / "files" / "cache"),
         "trash_gb": size_gb(DATA / "quarantine"),
         "upload_spool_gb": round(size_gb(DATA / "incoming") + size_gb(DATA / "tmp" / "uploads"), 3),
-        "databases_gb": round(sum(path.stat().st_size for path in EXPECTED_DATABASES if path.is_file()) / 1073741824, 3),
+        "databases_gb": round(sum(path.stat().st_size for path in expected_databases() if path.is_file()) / 1073741824, 3),
         "backups_gb": size_gb(BACKUPS),
     }
     stale_parts = 0
@@ -273,7 +400,7 @@ def storage_card() -> dict:
     for root in (DATA / "incoming", DATA / "tmp" / "uploads", DATA / "files" / "incoming"):
         if root.is_dir():
             stale_parts += sum(1 for item in root.glob("*.part") if item.is_file() and item.stat().st_mtime < cutoff)
-    used = max(external["used_percent"], os_disk["used_percent"])
+    used = max(external["used_percent"], microsd["used_percent"])
     status = "critical" if used >= 90 or external["free_gb"] < 5 else "warning" if used >= 80 or stale_parts else "healthy"
     code = {"healthy": "STORAGE_HEALTHY", "warning": "STORAGE_WARNING", "critical": "STORAGE_CRITICAL"}[status]
     growth = {"24h_percentage_points": None, "7d_percentage_points": None}
@@ -293,7 +420,7 @@ def storage_card() -> dict:
         except (sqlite3.Error, OSError):
             pass
     return card(status, "Storage has comfortable free space." if status == "healthy" else "Storage needs attention.", {
-        "external": external, "os_disk": os_disk, "microsd": os_disk, "categories": categories,
+        "external": external, "microsd": microsd, "categories": categories,
         "stale_part_files": stale_parts, "upload_render_reserve_gb": 1,
         "growth": growth, "low_space_rejections": None,
     }, "" if status == "healthy" else "Review free space and stale temporary data.", code)
@@ -301,10 +428,11 @@ def storage_card() -> dict:
 
 def backups_card() -> dict:
     info = safe_json(BACKUP_STATUS)
-    last = info.get("last_success")
+    last = info.get("last_success") or info.get("completed_at")
     age = age_hours(last)
-    ok = bool(info.get("ok")) and age is not None
+    ok = bool(info.get("ok") or info.get("state") == "healthy") and age is not None
     independent = safe_json(INDEPENDENT_BACKUP_STATUS)
+    restore_evidence = restore_evidence_summary(independent)
     independent_last = independent.get("completed_at")
     independent_age = age_hours(independent_last)
     mounted, _ = command(["mountpoint", "-q", str(INDEPENDENT_BACKUP)])
@@ -334,6 +462,20 @@ def backups_card() -> dict:
         and independent_age is not None
     )
     independent_configured = bool(mounted and sentinel_valid)
+    try:
+        capacity = disk_details(INDEPENDENT_BACKUP) if mounted else None
+    except OSError:
+        capacity = None
+    offsite = safe_json(B2_BACKUP_STATUS)
+    offsite_last = offsite.get("completed_at")
+    offsite_age = age_hours(offsite_last)
+    offsite_source_confirmed = bool(
+        offsite.get("state") in {"healthy", "uploaded_pending_restore"}
+        and offsite.get("source_snapshot_confirmed") is True
+        and offsite.get("repository_sample_checked") is True
+    )
+    offsite_restore_verified = offsite.get("offsite_restore_verified") is True
+    object_lock_verified = offsite.get("object_lock_verified") is True
     if not ok or (age is not None and age >= 72):
         state, code = "critical", "BACKUP_FAILED_OR_OLD"
     elif not independent_configured:
@@ -342,22 +484,42 @@ def backups_card() -> dict:
         state, code = "critical", "DATA_BACKUP_FAILED_OR_OLD"
     elif age >= 30 or independent_age >= 30:
         state, code = "warning", "BACKUP_STALE"
+    elif capacity and (capacity["used_percent"] >= 90 or capacity["free_gb"] < 5):
+        state, code = "critical", "BACKUP_CAPACITY_CRITICAL"
+    elif capacity and capacity["used_percent"] >= 80:
+        state, code = "warning", "BACKUP_CAPACITY_LOW"
+    elif OFFSITE_REQUIRED and not offsite:
+        state, code = "warning", "OFFSITE_BACKUP_NOT_CONFIGURED"
+    elif OFFSITE_REQUIRED and offsite.get("state") == "failed":
+        state, code = "warning", "OFFSITE_BACKUP_FAILED"
+    elif OFFSITE_REQUIRED and (offsite_age is None or offsite_age >= 72 or not offsite_source_confirmed):
+        state, code = "warning", "OFFSITE_BACKUP_UNVERIFIED"
+    elif OFFSITE_REQUIRED and (not offsite_restore_verified or not object_lock_verified):
+        state, code = "warning", "OFFSITE_RESTORE_PENDING"
+    elif restore_evidence["state"] != "isolated_data_verified":
+        state, code = "warning", "INDEPENDENT_RESTORE_EVIDENCE_PENDING"
+    elif not restore_evidence["application_boot_verified"]:
+        state, code = "warning", "RESTORE_APPLICATION_BOOT_PENDING"
     else:
         state, code = "healthy", "BACKUPS_HEALTHY"
     retained = len([path for path in BACKUPS.glob("*-daily") if path.is_dir()]) if BACKUPS.is_dir() else 0
     summary = (
-        "Recovery and independent data backups are current."
+        "Required backup copies are current and restore-verified."
         if state == "healthy"
-        else "One or more backups are stale, failed, or unavailable."
+        else "Backup copies exist, but one or more recovery checks still need attention."
     )
     return card(state, summary, {
-        "last_attempt": info.get("last_attempt", last), "last_success": last,
+        "last_attempt": info.get("last_attempt") or info.get("started_at") or last, "last_success": last,
         "age_hours": age, "last_failure": info.get("error"),
-        "expected_databases": len(EXPECTED_DATABASES),
+        "expected_databases": len(expected_databases()),
         "databases_included": info.get("database_count", 0),
-        "source_archive_included": ok, "quick_check": "passed" if ok else "unavailable",
+        "source_archive_included": info.get("source_archive") is True,
+        "signed_manifest_available": bool(info.get("manifest_sha256")),
+        "quick_check": "passed" if info.get("quick_check") is True else "unavailable",
         "retained_sets": retained, "timer": unit_state("david-pi-backup.timer"),
         "independent_data_backup": {
+            "capacity": capacity,
+            "writers_quiesced": independent.get("writers_quiesced") is True,
             "configured": independent_configured,
             "originals_included": independent_ok,
             "documents_included": independent_ok,
@@ -367,64 +529,24 @@ def backups_card() -> dict:
             "snapshot": independent.get("snapshot"),
             "databases_included": independent.get("database_count", 0),
             "timer": unit_state("david-pi-data-backup.timer"),
-            "last_restoration_test": None,
+            "last_restoration_test": restore_evidence["last_verified"],
+            "restore_proof_state": restore_evidence["state"],
+            "restore_evidence": restore_evidence,
+        },
+        "offsite_backup": {
+            "required": OFFSITE_REQUIRED,
+            "local_only_risk": "Loss of the entire location is not covered." if not OFFSITE_REQUIRED else None,
+            "configured": bool(offsite),
+            "state": offsite.get("state", "unavailable"),
+            "last_attempt": offsite_last,
+            "age_hours": offsite_age,
+            "source_snapshot_confirmed": offsite_source_confirmed,
+            "repository_sample_checked": offsite.get("repository_sample_checked") is True,
+            "object_lock_verified": object_lock_verified,
+            "offsite_restore_verified": offsite_restore_verified,
+            "pruning_enabled": offsite.get("pruning_enabled"),
         },
     }, "" if state == "healthy" else "Check both backup destinations and timers.", code)
-
-
-def generic_temperature() -> tuple[float | None, str]:
-    candidates: list[float] = []
-    for path in Path("/sys/class/thermal").glob("thermal_zone*/temp"):
-        try:
-            value = float(path.read_text(encoding="utf-8").strip())
-            value = value / 1000 if value > 1000 else value
-            if 0 < value < 125:
-                candidates.append(value)
-        except (OSError, ValueError):
-            continue
-    for path in Path("/sys/class/hwmon").glob("hwmon*/temp*_input"):
-        try:
-            name = (path.parent / "name").read_text(encoding="utf-8").strip().lower()
-            label_path = path.with_name(path.name.replace("_input", "_label"))
-            label = label_path.read_text(encoding="utf-8").strip().lower() if label_path.exists() else ""
-            if not any(term in f"{name} {label}" for term in ("cpu", "core", "package", "soc", "k10temp", "coretemp")):
-                continue
-            value = float(path.read_text(encoding="utf-8").strip())
-            value = value / 1000 if value > 1000 else value
-            if 0 < value < 125:
-                candidates.append(value)
-        except (OSError, ValueError):
-            continue
-    return (round(max(candidates), 1), "linux-sysfs") if candidates else (None, "unavailable")
-
-
-def battery_details() -> dict:
-    power_root = Path("/sys/class/power_supply")
-    batteries = sorted(power_root.glob("BAT*"))
-    if not batteries:
-        return {"present": False, "capacity_percent": None, "status": "unavailable", "ac_online": None}
-    battery = batteries[0]
-    try:
-        capacity = int((battery / "capacity").read_text(encoding="utf-8").strip())
-    except (OSError, ValueError):
-        capacity = None
-    try:
-        status = (battery / "status").read_text(encoding="utf-8").strip().lower()
-    except OSError:
-        status = "unavailable"
-    ac_online = None
-    for supply in power_root.iterdir() if power_root.is_dir() else ():
-        if supply.name.startswith("BAT"):
-            continue
-        try:
-            supply_type = (supply / "type").read_text(encoding="utf-8").strip().lower()
-            if supply_type in {"mains", "usb", "usb_c"} and (supply / "online").exists():
-                ac_online = (supply / "online").read_text(encoding="utf-8").strip() == "1"
-                if ac_online:
-                    break
-        except OSError:
-            continue
-    return {"present": True, "capacity_percent": capacity, "status": status, "ac_online": ac_online}
 
 
 def temperature_card() -> dict:
@@ -436,9 +558,6 @@ def temperature_card() -> dict:
             temperature = float(temp_raw.split("=")[1].split("'")[0])
         except ValueError:
             pass
-    sensor_source = "vcgencmd" if temperature is not None else "unavailable"
-    if temperature is None:
-        temperature, sensor_source = generic_temperature()
     throttled = 0
     if throttle_ok and "=" in throttle_raw:
         try:
@@ -477,17 +596,10 @@ def temperature_card() -> dict:
                     recent_peak = max(temperature or float(row[0]), float(row[0]))
         except (sqlite3.Error, OSError):
             pass
-    battery = battery_details()
-    battery_warning = bool(
-        battery["present"]
-        and battery["ac_online"] is False
-        and battery["capacity_percent"] is not None
-        and battery["capacity_percent"] < 20
-    )
-    state = "critical" if active_throttle or (temperature is not None and temperature >= 80) else "warning" if historical_throttle or battery_warning or (temperature is not None and temperature >= 70) else "healthy"
+    state = "critical" if active_throttle or (temperature is not None and temperature >= 80) else "warning" if historical_throttle or (temperature is not None and temperature >= 70) else "healthy"
     return card(state, "Temperature and power look normal." if state == "healthy" else "A temperature or power event needs review.", {
-        "platform_profile": platform_profile(), "temperature_c": temperature,
-        "temperature_sensor": sensor_source, "recent_peak_c": recent_peak,
+        "temperature_c": temperature, "recent_peak_c": recent_peak,
+        "host_uptime_seconds": host_uptime_seconds(),
         "active_throttling": active_throttle, "historical_throttling": historical_throttle,
         "active_undervoltage": active_under, "historical_undervoltage": historical_under,
         "load_average": [float(value) for value in load],
@@ -495,7 +607,6 @@ def temperature_card() -> dict:
         "ram_available_gb": round(mem.get("MemAvailable", 0) / 1048576, 2),
         "swap_total_gb": round(mem.get("SwapTotal", 0) / 1048576, 2),
         "swap_free_gb": round(mem.get("SwapFree", 0) / 1048576, 2),
-        "battery": battery,
         "oom_events": lowered.count("out of memory") + lowered.count("oom-kill"),
         "usb_resets_disconnects": lowered.count("reset superspeed usb") + lowered.count("usb disconnect"),
         "filesystem_io_errors": sum(lowered.count(term) for term in ("i/o error", "buffer i/o", "ext4-fs error")),
@@ -520,16 +631,13 @@ def tailscale_card() -> dict:
     loopback = "127.0.0.1:8090" in listeners if listeners_ok else False
     serve_private = "127.0.0.1:8090" in serve and "tailnet only" in serve.lower()
     funnel_disabled = "funnel on" not in funnel.lower() and "public" not in funnel.lower()
-    dns_name = str(self_node.get("DNSName") or "").rstrip(".")
-    resolve = f"{dns_name}:443:{addresses[0]}" if dns_name and addresses else ""
+    public_host = str(self_node.get("DNSName") or "").rstrip(".")
+    resolve = f"{public_host}:443:{addresses[0]}" if addresses and public_host else ""
     https_arguments = ["curl", "-fsS", "-o", "/dev/null", "-w", "%{time_total}", "--max-time", "5"]
     if resolve:
         https_arguments.extend(["--resolve", resolve])
-    if dns_name:
-        https_arguments.append(f"https://{dns_name}/health")
-        https_ok, latency = command(https_arguments)
-    else:
-        https_ok, latency = False, ""
+    https_arguments.append(f"https://{public_host}/health")
+    https_ok, latency = command(https_arguments)
     state = "healthy"
     code = "TAILSCALE_PRIVATE_HEALTHY"
     if not connected or not serve_private or not funnel_disabled or lan_violation or not loopback:
@@ -564,6 +672,7 @@ def pihole_card() -> dict:
 
 def jobs_card() -> dict:
     jobs = {"active": 0, "pending": 0, "recent_completed": 0, "recent_failed": 0, "oldest_pending_age_seconds": None}
+    database_available = False
     try:
         with sqlite3.connect(f"file:{DATA / 'photos.db'}?mode=ro", uri=True, timeout=2) as database:
             cutoff = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=1)).isoformat()
@@ -574,12 +683,78 @@ def jobs_card() -> dict:
             oldest = database.execute("SELECT MIN(created_at) FROM slideshow_jobs WHERE status='queued'").fetchone()[0]
             if oldest:
                 jobs["oldest_pending_age_seconds"] = int((dt.datetime.now(dt.timezone.utc) - dt.datetime.fromisoformat(oldest.replace("Z", "+00:00"))).total_seconds())
+            database_available = True
     except (OSError, sqlite3.Error, ValueError):
         pass
+    workers = {}
+    for name in (
+        "david-pi-audiobook-preparer",
+        "david-pi-chat-notifier",
+        "david-pi-maintenance",
+        "david-pi-device-backup-worker",
+        "david-pi-slideshow-worker",
+    ):
+        ok, raw = command([
+            "docker", "inspect", name, "--format", "{{json .State}}|{{.RestartCount}}",
+        ])
+        worker = {
+            "available": False, "running": False, "health": "unavailable",
+            "restart_count": None, "started_at": None,
+        }
+        if ok and "|" in raw:
+            state_raw, restart_raw = raw.strip().rsplit("|", 1)
+            try:
+                runtime = json.loads(state_raw)
+                runtime_health = runtime.get("Health")
+                health = (
+                    runtime_health.get("Status", "unknown")
+                    if isinstance(runtime_health, dict)
+                    else "unknown"
+                )
+                worker.update({
+                    "available": True,
+                    "running": runtime.get("Running") is True,
+                    "health": health,
+                    "restart_count": int(restart_raw or 0),
+                    "started_at": runtime.get("StartedAt") or None,
+                })
+            except (json.JSONDecodeError, TypeError, ValueError):
+                pass
+        workers[name] = worker
     spool = size_gb(DATA / "tmp" / "uploads")
-    state = "critical" if jobs["recent_failed"] >= 3 else "warning" if jobs["pending"] >= 3 or jobs["recent_failed"] else "healthy"
+    healthchecked_unhealthy = any(
+        not workers[name]["available"]
+        or not workers[name]["running"]
+        or workers[name]["health"] != "healthy"
+        for name in (
+            "david-pi-maintenance",
+            "david-pi-device-backup-worker",
+            "david-pi-slideshow-worker",
+        )
+    )
+    other_worker_unhealthy = any(
+        not worker["available"]
+        or not worker["running"]
+        or worker["health"] in {"dead", "exited", "unhealthy"}
+        for name, worker in workers.items()
+        if name not in {
+            "david-pi-maintenance",
+            "david-pi-device-backup-worker",
+            "david-pi-slideshow-worker",
+        }
+    )
+    old_queue = jobs["oldest_pending_age_seconds"] is not None and jobs["oldest_pending_age_seconds"] >= 7200
+    if not database_available:
+        state = "unavailable"
+    elif jobs["recent_failed"] >= 3:
+        state = "critical"
+    elif healthchecked_unhealthy or other_worker_unhealthy or jobs["pending"] >= 3 or jobs["recent_failed"] or old_queue:
+        state = "warning"
+    else:
+        state = "healthy"
     return card(state, "Background work is operating normally." if state == "healthy" else "Some background work needs review.", {
-        "slideshows": {**jobs, "queue_capacity": 4, "recent_timeouts": 0, "queue_full": 0, "duplicates_suppressed": 0},
+        "slideshows": {**jobs, "database_available": database_available, "queue_capacity": 3, "recent_timeouts": 0, "queue_full": 0, "duplicates_suppressed": 0},
+        "workers": workers,
         "pdf": {"active": 0, "waiting": 0, "recent_failures": 0, "recent_timeouts": 0, "cache_gb": size_gb(DATA / "files" / "cache")},
         "uploads": {"active": 0, "recent_successes": 0, "recent_failures": 0, "spool_gb": spool, "stale_temp_files": 0, "rejections": 0},
         "remote_work": {"successes": 0, "timeouts": 0, "safe_failures": 0},
@@ -607,6 +782,138 @@ def unit_state(name: str) -> dict:
     }
 
 
+def access_control_card() -> dict:
+    """Aggregate content-neutral denial evidence across every web worker.
+
+    The deployment label declares the mode without exposing the container's
+    environment. Only fixed-format counter lines are parsed from bounded
+    container logs; all other log content is discarded rather than published.
+    """
+    label_template = f'{{{{index .Config.Labels "{ACCESS_MODE_LABEL}"}}}}'
+    mode_ok, raw_mode = command(
+        ["docker", "inspect", ACCESS_CONTAINER, "--format", label_template],
+        limit=256,
+    )
+    if not mode_ok:
+        return card(
+            "unavailable",
+            "The portal access-control mode and denial totals are unavailable.",
+            {
+                "configured_mode": "unknown",
+                "effective_mode": "unknown",
+                "configuration_valid": False,
+                "enforcement_active": False,
+                "counter_scope": "container_aggregate_rolling_window",
+                "counter_window_hours": ACCESS_COUNTER_WINDOW_HOURS,
+                "counter_line_limit": ACCESS_COUNTER_LINE_LIMIT,
+                "counter_window_complete": False,
+                "observed_denials_total": None,
+                "blocked_denials_total": None,
+                "shadow_denials_total": None,
+                "unenforced_denials_total": None,
+            },
+            "Check the collector's Docker access and the portal deployment label.",
+            "ACCESS_STATE_UNAVAILABLE",
+        )
+
+    mode = raw_mode.strip().casefold()
+    configuration_valid = mode in ACCESS_MODES
+    configured_mode = mode if configuration_valid else "unknown"
+    # The application deliberately fails closed to enforcement when
+    # configuration is invalid. Keep the invalid configuration visible as a
+    # warning even though requests remain protected.
+    effective_mode = mode if configuration_valid else "enforce"
+    logs_ok, raw_logs = command(
+        [
+            "docker",
+            "logs",
+            "--since",
+            f"{ACCESS_COUNTER_WINDOW_HOURS}h",
+            "--tail",
+            str(ACCESS_COUNTER_LINE_LIMIT),
+            ACCESS_CONTAINER,
+        ],
+        timeout=10,
+        limit=ACCESS_COUNTER_OUTPUT_LIMIT,
+        include_stderr=True,
+    )
+    lines = raw_logs.splitlines() if logs_ok else []
+    window_complete = bool(
+        logs_ok
+        and len(lines) < ACCESS_COUNTER_LINE_LIMIT
+        and len(raw_logs) < ACCESS_COUNTER_OUTPUT_LIMIT
+    )
+    counters = {"blocked": 0, "shadow": 0, "unenforced": 0}
+    valid_pair = {"enforce": "blocked", "shadow": "shadow", "off": "unenforced"}
+    if logs_ok:
+        for line in lines:
+            match = ACCESS_COUNTER_PATTERN.search(line)
+            if match and valid_pair[match.group(1)] == match.group(2):
+                counters[match.group(2)] += 1
+
+    details = {
+        "configured_mode": configured_mode,
+        "effective_mode": effective_mode,
+        "configuration_valid": configuration_valid,
+        "enforcement_active": configuration_valid and effective_mode == "enforce",
+        "counter_scope": "container_aggregate_rolling_window",
+        "counter_window_hours": ACCESS_COUNTER_WINDOW_HOURS,
+        "counter_line_limit": ACCESS_COUNTER_LINE_LIMIT,
+        "counter_window_complete": window_complete,
+        "observed_denials_total": sum(counters.values()) if logs_ok else None,
+        "blocked_denials_total": counters["blocked"] if logs_ok else None,
+        "shadow_denials_total": counters["shadow"] if logs_ok else None,
+        "unenforced_denials_total": counters["unenforced"] if logs_ok else None,
+    }
+    if not configuration_valid:
+        return card(
+            "warning",
+            "The configured access mode is unknown; fail-closed enforcement is active.",
+            details,
+            "Set DAVID_PI_ACCESS_MODE to off, shadow, or enforce explicitly.",
+            "ACCESS_MODE_UNKNOWN",
+        )
+    if not logs_ok:
+        return card(
+            "warning",
+            "The access mode is known, but aggregate denial evidence is unavailable.",
+            details,
+            "Check access to the bounded portal container logs.",
+            "ACCESS_COUNTERS_UNAVAILABLE",
+        )
+    if not window_complete:
+        return card(
+            "warning",
+            "Access-denial totals are partial because the bounded window was capped.",
+            details,
+            "Review log volume before relying on the rolling denial totals.",
+            "ACCESS_COUNTER_WINDOW_CAPPED",
+        )
+    if effective_mode == "enforce":
+        return card(
+            "healthy",
+            "The reviewed private identity allowlist is enforced.",
+            details,
+            "",
+            "ACCESS_ENFORCEMENT_ACTIVE",
+        )
+    if effective_mode == "shadow":
+        return card(
+            "warning",
+            "Access decisions are observed, but denials are not enforced.",
+            details,
+            "Complete the identity canary before enabling enforcement.",
+            "ACCESS_SHADOW_ACTIVE",
+        )
+    return card(
+        "warning",
+        "Central portal access enforcement is turned off.",
+        details,
+        "Use shadow for a canary or enforce after the access gate passes.",
+        "ACCESS_ENFORCEMENT_OFF",
+    )
+
+
 def services_card() -> dict:
     units = {name: unit_state(name) for name in SERVICES}
     failed = [name for name, value in units.items() if value["active"] == "failed" or value["result"] == "failed"]
@@ -620,7 +927,13 @@ def databases_summary() -> list[dict]:
     backup_sets = sorted((path for path in BACKUPS.glob("*-daily/databases") if path.is_dir()), reverse=True)
     latest = backup_sets[0] if backup_sets else None
     result = []
-    for path in EXPECTED_DATABASES:
+    backup_status = safe_json(BACKUP_STATUS)
+    backup_verified = bool(
+        backup_status.get("ok")
+        and backup_status.get("quick_check") is True
+        and age_hours(backup_status.get("last_success")) is not None
+    )
+    for path in expected_databases():
         try:
             stat = path.stat()
             backup = latest / path.name if latest else None
@@ -628,7 +941,7 @@ def databases_summary() -> list[dict]:
                 "name": path.name, "present": True, "size_bytes": stat.st_size,
                 "last_modified": dt.datetime.fromtimestamp(stat.st_mtime, dt.timezone.utc).isoformat(),
                 "last_backup": dt.datetime.fromtimestamp(backup.stat().st_mtime, dt.timezone.utc).isoformat() if backup and backup.is_file() else None,
-                "last_integrity_check": "passed" if backup and backup.is_file() else "unavailable",
+                "last_integrity_check": "passed" if backup and backup.is_file() and backup_verified else "unavailable",
                 "busy_locked_errors": 0, "unexpected_growth": False,
             })
         except OSError:
@@ -638,19 +951,31 @@ def databases_summary() -> list[dict]:
 
 def updates_card() -> dict:
     ok, raw = command(["apt", "list", "--upgradable"], timeout=12, limit=131072)
-    pending = max(0, len([line for line in raw.splitlines() if "/" in line]) if ok else 0)
-    reboot = Path("/var/run/reboot-required").exists()
+    pending = max(0, len([line for line in raw.splitlines() if "/" in line])) if ok else None
+    reboot = REBOOT_REQUIRED.exists()
     image_ok, image = command(["docker", "inspect", "family-photo-portal", "--format", "{{.Config.Image}}"])
     deploy_time = None
     compose = Path("/srv/compose/photo-portal/compose.yaml")
     if compose.exists():
         deploy_time = dt.datetime.fromtimestamp(compose.stat().st_mtime, dt.timezone.utc).isoformat()
-    state = "warning" if reboot or pending else "healthy"
-    return card(state, "The operating system is current." if state == "healthy" else "Updates or a reboot are waiting.", {
-        "last_package_list_update": None, "last_unattended_upgrade": None,
+    # Repository file mtimes describe publication, not a successful local refresh.
+    last_package_update = file_mtime(UPDATE_SUCCESS)
+    check_age = age_hours(last_package_update)
+    last_unattended_upgrade = file_mtime(Path("/var/log/unattended-upgrades/unattended-upgrades.log"))
+    if not ok:
+        state, code, summary = "unavailable", "UPDATES_CHECK_UNAVAILABLE", "Package update status is unavailable."
+    elif check_age is None or check_age < 0 or check_age > 48:
+        state, code, summary = "warning", "UPDATES_CHECK_STALE", "A successful recent package refresh has not been verified."
+    elif reboot or pending:
+        state, code, summary = "warning", "UPDATES_WAITING", "Updates or a reboot are waiting."
+    else:
+        state, code, summary = "healthy", "UPDATES_HEALTHY", "No pending package updates were reported."
+    return card(state, summary, {
+        "last_package_list_update": last_package_update, "last_unattended_upgrade": last_unattended_upgrade,
+        "check_age_hours": check_age,
         "pending_packages": pending, "security_updates": None, "reboot_required": reboot,
         "last_portal_deployment": deploy_time, "application_version": image.strip() if image_ok else "Unavailable",
-    }, "Schedule updates or a reboot when convenient." if state != "healthy" else "", "UPDATES_" + state.upper())
+    }, "Check package metadata or schedule updates when convenient." if state != "healthy" else "", code)
 
 
 def collect() -> dict:
@@ -659,6 +984,7 @@ def collect() -> dict:
         "backups": backups_card, "temperature_power": temperature_card,
         "tailscale": tailscale_card, "pihole": pihole_card,
         "background_jobs": jobs_card, "services": services_card, "updates": updates_card,
+        "access_control": access_control_card,
     }
     subsystems = {}
     for name, function in collectors.items():
@@ -669,7 +995,6 @@ def collect() -> dict:
     overall = max((value["state"] for value in subsystems.values()), key=lambda value: STATE_RANK[value])
     return {
         "schema_version": 1, "generated_at": now_iso(), "state": overall,
-        "host": {"platform_profile": platform_profile(), "architecture": platform.machine()},
         "subsystems": subsystems, "databases": databases_summary(),
         "orphan_audit": {"count": None, "size_bytes": None, "state": "not_run"},
         "privacy": {"contains_personal_filenames": False, "contains_domains": False, "contains_clients": False, "contains_secrets": False},
