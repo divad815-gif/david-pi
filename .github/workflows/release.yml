@@ -39,6 +39,9 @@ jobs:
           distribution: temurin
           java-version: '17.0.20.1'
       - uses: android-actions/setup-android@v3
+        with:
+          # Avoid the unavailable legacy "tools" package in the action default.
+          packages: platform-tools
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
       - name: Install verification tools
@@ -51,7 +54,7 @@ jobs:
         run: |
           python scripts/check-public-release.py
           python scripts/check_tracked_secrets.py
-          pytest -q tests installer/tests
+          python -m pytest -q tests installer/tests
           node --test tests/*.test.mjs
       - name: Build with the existing Android signing identity
         env:

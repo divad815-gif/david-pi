@@ -28,7 +28,7 @@ jobs:
       - run: python scripts/check_tracked_secrets.py
       - run: shellcheck -e SC1091,SC2034 david-pi install.sh installer/lib/*.sh scripts/*.sh deploy/*.sh
       - run: bash -n david-pi install.sh installer/lib/*.sh scripts/*.sh deploy/*.sh
-      - run: pytest -q tests installer/tests
+      - run: python -m pytest -q tests installer/tests
       - run: node --test tests/*.test.mjs
       - run: docker compose config >/dev/null
       - run: docker compose -f compose.yaml -f compose.dev.yaml config >/dev/null
@@ -46,6 +46,10 @@ jobs:
           distribution: temurin
           java-version: "17"
       - uses: android-actions/setup-android@v3
+        with:
+          # Command-line tools are set up separately by the action; the old
+          # SDK package named "tools" is no longer available.
+          packages: platform-tools platforms;android-35 build-tools;35.0.0
       - working-directory: clients/android
         run: ./gradlew testDebugUnitTest assembleDebug --no-daemon
 
