@@ -921,6 +921,33 @@ def test_repair_recovers_failed_unit_before_readiness_and_portal_handoff(reconne
     assert json.loads((controller.state / "installed.json").read_text())["instance_id"] == cfg["instance_id"]
 
 
+def test_clean_recovery_repair_refreshes_host_observations_before_waiting_for_workers(reconnect_host, monkeypatch):
+    controller, _, cfg, perform, _ = fresh_install_with_unit(
+        reconnect_host, monkeypatch, operation="repair",
+        unit_state={"active": "inactive", "sub": "dead", "result": "success"},
+    )
+    # A clean replacement has restored configuration but no enabled status
+    # timer. The one observation written before startup can become stale while
+    # containers start; Maintenance cannot become healthy without refreshes.
+    status_timer_active = False
+    runner = controller.runner
+
+    def require_fresh_observations(args, **kwargs):
+        nonlocal status_timer_active
+        if args == ["systemctl", "enable", "--now", "david-pi-status.timer"]:
+            assert controller.config() == cfg and controller.compose_path.exists()
+            status_timer_active = True
+        if Path(args[0]).name == "docker" and "up" in args and "--wait" in args:
+            if not status_timer_active:
+                raise HostError("Maintenance is waiting for fresh host observations")
+        return runner(args, **kwargs)
+
+    controller.runner = require_fresh_observations
+    assert perform()["ready"] is True
+    assert status_timer_active
+    assert json.loads((controller.state / "installed.json").read_text())["instance_id"] == cfg["instance_id"]
+
+
 @pytest.mark.parametrize("failure", ["startup", "unit", "worker", "application"])
 def test_repair_failure_does_not_complete_or_open_portal(reconnect_host, monkeypatch, failure):
     controller, serve, cfg, perform, events = fresh_install_with_unit(

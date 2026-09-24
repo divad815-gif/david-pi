@@ -1386,12 +1386,14 @@ class Controller:
         serve_state = self.inspect_private_root(cfg["public_url"])
         self.phase(job, "recreating selected services")
         self.write_runtime(cfg, self.release()["image"])
+        # A clean restore has no running status timer yet. Maintenance health
+        # needs refreshed host observations while the selected services start.
+        self.runner(["systemctl", "enable", "--now", "david-pi-status.timer"])
         self.docker("up", "-d", "--remove-orphans", "--force-recreate", "--wait", "--wait-timeout", "180")
         # A repaired stack must also start its previously failed oneshot unit.
         # Its normal `up --wait` rechecks startup without recreating containers.
         self.runner(["systemctl", "enable", "--now", "david-pi-portal.service"])
         result = self.readiness()
-        self.runner(["systemctl", "enable", "--now", "david-pi-status.timer"])
         self.set_private_root(cfg["public_url"], "http://127.0.0.1:8090", serve_state)
         atomic_json(self.state / "installed.json", {"completed_at": time.time(), "instance_id": cfg["instance_id"]})
         (self.state / "pending-install.json").unlink(missing_ok=True)
