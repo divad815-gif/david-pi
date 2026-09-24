@@ -1,0 +1,87 @@
+name: Publish verified beta registry content
+
+on:
+  push:
+    branches: ['publication/beta1-driver']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: testing-release
+  cancel-in-progress: false
+
+jobs:
+  registry:
+    if: github.repository == 'divad815-gif/david-pi'
+    environment: testing-release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      # Draft discovery/download needs write-level repository visibility. The
+      # driver stops before every release/asset mutation.
+      contents: write
+      packages: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PUBLISHER_REVISION: ${{ github.sha }}
+      ANDROID_BUILD_TOOLS_VERSION: 35.0.0
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: publisher
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          ref: 1c1dc0df31ba49a9759d88a02ab490b2c7d2d873
+          path: candidate-source
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17.0.20.1'
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+      - uses: docker/setup-docker-action@v5
+        with:
+          version: v29.1.3
+          daemon-config: |
+            {"features":{"containerd-snapshotter":true},"max-concurrent-uploads":2}
+      - uses: docker/setup-buildx-action@v3
+      - name: Install verification tools only
+        working-directory: candidate-source
+        run: |
+          pip install -r requirements.txt
+          sdkmanager "build-tools;$ANDROID_BUILD_TOOLS_VERSION" "platforms;android-35"
+          echo "ANDROID_JAVA=$JAVA_HOME/bin/java" >> "$GITHUB_ENV"
+      - name: Authenticate registry upload without signing keys
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Verify the staged candidate and publish only its exact registry content
+        working-directory: candidate-source
+        run: |
+          python ../publisher/scripts/promote_staged_beta_registry.py \
+            --source . --output work/actions-beta \
+            --repository divad815-gif/david-pi --tag v10.0.0-beta.1 \
+            --release-id 395277063 \
+            --expected-revision 1c1dc0df31ba49a9759d88a02ab490b2c7d2d873 \
+            --expected-transfer-sha256 be0d78881e1cd84df4706c7526ec96f1b7936871cb452d1b9f3c73bcaed87a9e \
+            --candidate-receipt-sha256 ae395d64708e07099af47113f57e48356ce2440e103249693ec6ca1edeb94bbc \
+            --acceptance-sha256 485ba212e7cfb18f35a62eaa5ab9297d5c2b6037ed39464a164c73490df670df \
+            --publisher-revision "$PUBLISHER_REVISION"
+      - name: Preserve sanitized registry progress
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: testing-registry-progress
+          path: candidate-source/work/actions-beta/candidate/publication-receipt.json
+          if-no-files-found: ignore
+          retention-days: 14
