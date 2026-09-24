@@ -32,6 +32,9 @@
       $('displayName').value=current.display_name;$('timezone').value=current.timezone;$('country').value=current.country;
       $('serverAddress').textContent=`Private address: ${current.public_url}`;$('dataLocation').textContent=`Application data: ${current.storage.data_root}`;
       $('backupRoot').value=current.storage.backup_root || '';$('backupState').textContent=current.storage.backup_root?'Independent backup configured. Run a backup and restoration test to verify recovery.':'Backups are not configured. A lost data disk could lose your saved content.';
+      $('updateRecoveryRoot').value=current.storage.update_snapshot_root || '';
+      const recovery=data.update_recovery;
+      $('updateRecoveryState').textContent=recovery?`Update recovery: ${recovery.path}. ${recovery.error || (Number.isFinite(recovery.free_bytes)?`${(recovery.free_bytes/1024**3).toFixed(1)} GiB free. `:'')}${recovery.snapshots?.filter(item=>item.complete).length || 0} complete snapshot(s), ${recovery.snapshots?.filter(item=>!item.complete).length || 0} incomplete attempt(s).`:'Update recovery uses a separate folder alongside the library.';
       $('members').replaceChildren();current.members.forEach(memberRow);
       document.querySelectorAll('[data-module]').forEach(select=>select.value=current.modules[select.dataset.module]);
       $('webPush').checked=Boolean(current.integrations.web_push);$('releaseState').textContent=`Installed version: ${data.release?.version || 'local development'}`;
@@ -46,7 +49,7 @@
       const modules=Object.fromEntries([...document.querySelectorAll('select[data-module]')].map(select=>[select.dataset.module,select.value]));
       if(modules.device_backup!=='disabled' && modules.media==='disabled') throw new Error('Phone backup requires Media. Enable Media or turn off Phone backup.');
       const secrets={};if($('tmdbToken').value.trim())secrets.TMDB_API_READ_TOKEN=$('tmdbToken').value.trim();if($('mealdbKey').value.trim())secrets.THEMEALDB_API_KEY=$('mealdbKey').value.trim();
-      const result=await operation('settings',{configuration:{display_name:$('displayName').value.trim(),timezone:$('timezone').value.trim(),country:$('country').value.trim().toUpperCase(),members,modules,integrations:{web_push:$('webPush').checked},storage:{backup_root:$('backupRoot').value.trim()||null}},secrets});
+      const result=await operation('settings',{configuration:{display_name:$('displayName').value.trim(),timezone:$('timezone').value.trim(),country:$('country').value.trim().toUpperCase(),members,modules,integrations:{web_push:$('webPush').checked},storage:{backup_root:$('backupRoot').value.trim()||null,update_snapshot_root:$('updateRecoveryRoot').value.trim()||null}},secrets});
       $('tmdbToken').value='';$('mealdbKey').value='';status('Settings accepted. The server may reconnect while selected apps restart.');watch(result);
     }catch(error){status(error.message,true);}finally{$('saveSettings').disabled=false;}
   });

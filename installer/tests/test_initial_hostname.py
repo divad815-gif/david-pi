@@ -71,6 +71,7 @@ def test_initial_claim_uses_eventually_assigned_collision_name(fresh, monkeypatc
     assert setup["origin"] == "https://" + assigned
     assert setup["admin"] == "admin@example.test"
     assert setup["node_account"] == "owner@example.test"
+    assert setup["node_id"] == "node-1" and setup["tailnet"] == "home-network"
     assert not setup["claimed"] and setup["expires"] > host.time.time()
     assert len(setup["token_hash"]) == 64
     assert serve["TCP"]["8443"] == {"TCPForward": "127.0.0.1:3000"}

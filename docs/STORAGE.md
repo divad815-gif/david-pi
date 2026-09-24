@@ -122,3 +122,14 @@ Skipped backup must show **not configured**. A configured backup remains
 **restore unverified** until an actual restore has been tested. See
 [backup and restore](RECOVERY.md). Local recovery snapshots created before
 updates do not replace an independent backup.
+
+## Space for updating the server
+
+Update recovery defaults to a private folder alongside the library on the same
+filesystem. The first snapshot needs room for a full copy plus database working
+space and a 1 GiB reserve. Later snapshots share unchanged recovery copies, while
+changed content gets new copies. Leave space for that first snapshot when planning
+your library drive, or choose a separate prepared local update recovery folder in
+Settings. The system disk still holds container images and release downloads, but
+it no longer receives a full external-library copy by default. See
+[update storage and retention](UPDATES.md#where-update-snapshots-live).

@@ -4,11 +4,14 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
+import marshal
 import os
 import re
 import stat
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -31,7 +34,7 @@ RUNTIME_SOURCE_FILES = {
     EXPECTED_ARTIFACT_PATH: EXPECTED_ARTIFACT_PATH,
     EXPECTED_ATTESTATION_PATH: EXPECTED_ATTESTATION_PATH,
 }
-RUNTIME_SOURCE_TREES = ("modules", "config", "templates", "static", "assets", "knowledge")
+RUNTIME_SOURCE_TREES = ("modules", "config", "installer", "templates", "static", "assets", "knowledge")
 RUNTIME_ENTRYPOINT = "docker-entrypoint.sh"
 EXPECTED_IMAGE_ENTRYPOINT = ["/usr/local/bin/docker-entrypoint"]
 EXPECTED_IMAGE_CMD = [
@@ -161,7 +164,9 @@ def _expected_runtime_source(source_root: Path) -> dict[str, tuple[str, int]]:
         raise AndroidReleaseError("Tracked runtime source inventory is unavailable") from error
     if listed.returncode:
         raise AndroidReleaseError("Tracked runtime source inventory is unavailable")
-    required = set(RUNTIME_SOURCE_FILES) | {RUNTIME_ENTRYPOINT}
+    # APK and attestation are intentionally ignored build assets. The signed
+    # release verifier authenticates them separately; application source is tracked.
+    required = (set(RUNTIME_SOURCE_FILES) - {EXPECTED_ARTIFACT_PATH, EXPECTED_ATTESTATION_PATH}) | {RUNTIME_ENTRYPOINT}
     if not required.issubset(tracked):
         raise AndroidReleaseError("A required runtime source is not tracked by Git")
 
@@ -176,9 +181,14 @@ def _expected_runtime_source(source_root: Path) -> dict[str, tuple[str, int]]:
             label=f"Host runtime source tree {relative}",
             omit_python_cache=True,
         )
+        # The Docker build deliberately excludes installer/tests/. Keep this
+        # exact omission aligned with .dockerignore, while still rejecting any
+        # unexpected test files found inside the runtime image itself.
+        if relative == "installer":
+            observed = {name: value for name, value in observed.items() if not name.startswith("tests/")}
         observed_paths = {f"{relative}/{child}" for child in observed}
         tracked_paths = {
-            path for path in tracked if path.startswith(f"{relative}/")
+            path for path in tracked if path.startswith(f"{relative}/") and not path.startswith("installer/tests/")
         }
         if observed_paths != tracked_paths:
             raise AndroidReleaseError(
@@ -187,6 +197,37 @@ def _expected_runtime_source(source_root: Path) -> dict[str, tuple[str, int]]:
         for child, fingerprint in observed.items():
             expected[f"{relative}/{child}"] = fingerprint
     return expected
+
+
+def _verified_generated_cache(root: Path, files: dict) -> set[str]:
+    """Allow only bytecode generated from the accompanying, separately checked source.
+
+    The Dockerfile compiles /app with Python 3.13. Inspectors must use that same
+    Python bytecode version; unknown/orphan caches fail rather than being hidden.
+    No bytecode is executed during this check.
+    """
+    generated = set()
+    for relative in files:
+        path = Path(relative)
+        if "__pycache__" not in path.parts and path.suffix not in {".pyc", ".pyo", ".pyd"}:
+            continue
+        suffix = "." + sys.implementation.cache_tag + ".pyc"
+        if path.parent.name != "__pycache__" or not path.name.endswith(suffix):
+            raise AndroidReleaseError("Candidate has an unsupported generated Python cache")
+        source = path.parent.parent / (path.name.removesuffix(suffix) + ".py")
+        if source.as_posix() not in files:
+            raise AndroidReleaseError("Candidate has an orphan generated Python cache")
+        payload = (root / path).read_bytes()
+        try:
+            if payload[:4] != importlib.util.MAGIC_NUMBER or len(payload) < 17:
+                raise ValueError("bytecode version differs")
+            expected = compile((root / source).read_bytes(), "/app/" + source.as_posix(), "exec", dont_inherit=True, optimize=0)
+            if marshal.loads(payload[16:]) != expected:
+                raise ValueError("compiled code differs")
+        except (ValueError, TypeError, EOFError, SyntaxError) as error:
+            raise AndroidReleaseError("Candidate generated Python cache differs from its source") from error
+        generated.add(relative)
+    return generated
 
 
 def verify_image_runtime_config(config: dict) -> None:
@@ -306,6 +347,8 @@ def verified_candidate_android_release(image: str, source_root: Path) -> dict:
             ):
                 raise AndroidReleaseError("Candidate retains a public APK artifact")
             expected_runtime = _expected_runtime_source(source_root)
+            for generated in _verified_generated_cache(extracted_app, candidate_runtime):
+                del candidate_runtime[generated]
             if candidate_runtime != expected_runtime:
                 raise AndroidReleaseError(
                     "Candidate runtime source differs from the verified host source"

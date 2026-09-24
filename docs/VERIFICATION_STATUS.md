@@ -1,12 +1,28 @@
 # Verification status for the portable development candidate
 
-This is a working implementation record, not a stable-release receipt. Source
-continues to change. Only `docs/release-evidence/stable.json`, validated against
-the final exact source and APK, can satisfy publication gates.
+This is a working implementation record. Historical results below retain their
+original scope; they are not relabeled as final acceptance of later changes.
 
-The implementation checks below were completed at earlier source revisions.
-They establish progress, not acceptance of every subsequent commit. The final
-release must repeat its required checks against the exact artifacts it publishes.
+There are now two publication gates. An explicit testing prerelease uses
+`docs/release-evidence/testing.json` and `scripts/testing_release_gate.py` to bind
+technical installation, recovery, source, image and signed-APK checks to the
+candidate. Physical Pi/Android and unaided newcomer feedback are intentionally
+collected through that prerelease; see [testing and feedback](TESTING.md).
+
+Stable publication still requires `docs/release-evidence/stable.json` and the
+complete stable gate. A beta is never published as `latest`, and normal update
+checks continue to select stable releases only.
+
+## Testing-release implementation follow-up
+
+The testing candidate moves update snapshots alongside the library by default,
+reuses verified unchanged recovery copies, records the selected filesystem UUID,
+and retains failed attempts for explicit review. It adds a verified preparation
+and resumable restore path for replacement machines, lightweight strict worker
+health probes, corrected service status after repair, and initial-login correction
+that replaces the old claim code. These are implementation changes with focused
+tests; the exact candidate still needs its recorded technical VM checks before
+publishing its beta assets. Real-phone and newcomer results remain pending.
 
 ## Implementation checks
 

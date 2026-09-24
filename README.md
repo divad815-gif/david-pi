@@ -4,10 +4,12 @@ A private household server for photos, videos, files, notes, recipes, watchlists
 audiobooks, games, household chat and Android phone backup. Use your own website
 name—such as **John’s home**—and a Tailscale hostname such as **john-pi**.
 
-**Portable release 10.0.0 is in development. It is not published or ready for
-household installation yet.** Publication is blocked until the VM, restore,
-Android, Raspberry Pi and newcomer checks pass. Existing GitHub downloads may
-belong to the older installer. See [release status](docs/RELEASE.md).
+**Testing release: 10.0.0-beta.1.** This beta is for people helping test installation
+and the Android companion before the stable release. Follow the
+[beta installation and feedback guide](docs/TESTING.md); use its download only
+when that exact version appears as a GitHub **Pre-release**. Physical Pi/Android
+and newcomer feedback are part of the beta, not prerequisites for offering it.
+Older GitHub downloads use the previous installer. See [release status](docs/RELEASE.md).
 
 ![Setup flow: machine, Tailscale, administrator, name and storage, modules](docs/images/setup-flow.svg)
 
@@ -26,12 +28,12 @@ Tailscale is required. Movie search, online recipes, browser notifications and
 Pi-hole are optional. A manual movie watchlist and local recipes work without
 provider accounts. No streaming-service passwords are needed.
 
-## Install after the stable release is available
+## Install the explicitly selected testing release
 
 Open an interactive terminal on the server (or connect to it with SSH), then run:
 
 ```sh
-curl -fsSL https://github.com/divad815-gif/david-pi/releases/latest/download/install.sh | sudo bash
+curl -fsSL https://github.com/divad815-gif/david-pi/releases/download/v10.0.0-beta.1/install.sh | sudo bash
 ```
 
 The terminal shows download and machine-check messages, asks a few questions,
@@ -74,6 +76,7 @@ household. See [what uninstall preserves](docs/RECOVERY.md#update-snapshots-and-
 
 ## Guides
 
+- [Testing release and feedback checklist](docs/TESTING.md)
 - [Tailscale and private access](docs/TAILSCALE.md)
 - [Storage and prepared drives](docs/STORAGE.md)
 - [Household accounts and naming](docs/HOUSEHOLD.md)

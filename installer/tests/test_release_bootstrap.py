@@ -17,9 +17,8 @@ ROOT = Path(__file__).resolve().parents[2]
 
 def build_fake_release(
     tmp_path: Path, *, corrupt_checksum: bool = False, verify_only: bool = True,
-    cli_source: str | None = None,
+    cli_source: str | None = None, version: str = "9.22.1",
 ) -> tuple[Path, dict[str, str]]:
-    version = "9.22.1"
     release_root = tmp_path / f"david-pi-{version}"
     release_root.mkdir()
     (release_root / "VERSION").write_text(version + "\n", encoding="utf-8")
@@ -93,12 +92,12 @@ def test_failed_guided_setup_keeps_verified_recovery_cli(tmp_path: Path):
     assert cli_link.resolve() == installed.resolve()
 
 
-def run_piped_bootstrap_in_terminal(env, *, reply=None):
+def run_piped_bootstrap_in_terminal(env, *, reply=None, args=()):
     """Run the documented pipe with a real controlling PTY, without sudo."""
     import pty
     pid, descriptor = pty.fork()
     if pid == 0:
-        os.execve("/bin/bash", ["bash", "-c", 'cat "$1" | bash', "bootstrap-test", str(ROOT / "install.sh")], env)
+        os.execve("/bin/bash", ["bash", "-c", 'cat "$1" | bash -s -- "${@:2}"', "bootstrap-test", str(ROOT / "install.sh"), *args], env)
     output = bytearray()
     deadline = time.monotonic() + 20
     status = None
@@ -148,3 +147,62 @@ def test_bootstrap_explains_missing_interactive_terminal(tmp_path):
     assert "guided setup needs an interactive terminal" in result.stderr
     assert "fake setup invoked" not in result.stdout
     assert (tmp_path / "persistent-bootstrap" / "david-pi").is_file()
+
+
+@pytest.mark.parametrize("selection,version,accepted", [
+    ("latest", "10.0.0-beta.1", False),
+    ("10.0.0-beta.1", "10.0.0-beta.1", True),
+    ("10.0.0-beta.1", "10.0.0-beta.2", False),
+    ("10.0.0", "10.0.0-beta.1", False),
+    ("10.00.0-beta.1", "10.0.0-beta.1", False),
+    ("10.0.0-beta.01", "10.0.0-beta.1", False),
+    ("10.0.0-rc.1", "10.0.0-beta.1", False),
+])
+def test_bootstrap_explicit_testing_channel(tmp_path, selection, version, accepted):
+    _, env = build_fake_release(tmp_path, version=version)
+    env["DAVID_PI_VERSION"] = selection
+    result = subprocess.run(["bash", str(ROOT / "install.sh")], env=env, text=True, capture_output=True)
+    assert (result.returncode == 0) is accepted, result.stderr
+    if not accepted:
+        assert "Release verified" not in result.stdout
+
+
+def test_rendered_beta_bootstrap_pins_its_explicit_version(tmp_path):
+    _, env = build_fake_release(tmp_path, version="10.0.0-beta.1")
+    env.pop("DAVID_PI_VERSION", None)
+    rendered = tmp_path / "install.sh"
+    rendered.write_text((ROOT / "install.sh").read_text().replace("__RELEASE_VERSION__", "10.0.0-beta.1"))
+    result = subprocess.run(["bash", str(rendered)], env=env, text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
+
+
+def test_recovery_bootstrap_keeps_verified_metadata_and_dispatches_mode(tmp_path):
+    import json
+    _, env = build_fake_release(tmp_path, verify_only=False, cli_source='''#!/usr/bin/env bash
+printf 'mode=%s\\n' "$1"
+exit 99
+''')
+    code, output = run_piped_bootstrap_in_terminal(env, args=("--prepare-recovery",))
+    assert code == 99, output
+    assert "mode=prepare-recovery" in output
+    record = tmp_path / "persistent-bootstrap/verified-release.json"
+    assert record.stat().st_mode & 0o777 == 0o600
+    saved = json.loads(record.read_text())
+    assert saved["repository"] == "example/david-pi"
+    assert saved["selected_version"] == "latest"
+    assert saved["manifest"] == (tmp_path / "release-manifest.txt").read_text()
+
+
+def test_bootstrap_does_not_replace_installed_cli(tmp_path):
+    _, env = build_fake_release(tmp_path, verify_only=False)
+    config = tmp_path / 'installation.json'
+    config.write_text('{"existing":true}')
+    env['DAVID_PI_BOOTSTRAP_EXISTING_CONFIG'] = str(config)
+    cli = tmp_path / 'bin/david-pi'
+    cli.parent.mkdir()
+    cli.write_text('existing installed command')
+    result = subprocess.run(['bash', str(ROOT / 'install.sh')], env=env, text=True, capture_output=True)
+    assert result.returncode != 0
+    assert 'Existing host code and CLI were preserved' in result.stderr
+    assert cli.read_text() == 'existing installed command'
+    assert not (tmp_path / 'persistent-bootstrap').exists()

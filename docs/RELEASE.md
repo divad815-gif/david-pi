@@ -1,10 +1,13 @@
 # Portable release status and maintainer procedure
 
-**Target: 10.0.0. Status: unpublished development candidate.** The current working
-branch is not a new downloadable preview. No live server deployment is part of
-packaging. Real VM installation/recovery, signed Android/device checks, physical
-Pi 4/5 checks, accessibility and newcomer execution are required before stable
-publication. Unit tests and successful builds do not satisfy those gates.
+**Next testing target: 10.0.0-beta.1. Stable target: 10.0.0.** Both require an
+explicit publication step; a source branch or CI build is not a release. The
+[testing prerelease procedure](TESTING.md) permits willing friends to provide
+physical-device and newcomer feedback after the technical beta checks pass.
+No live server deployment is part of packaging. Real VM installation/recovery,
+signed Android/device checks, physical Pi 4/5 checks, accessibility and newcomer
+execution remain required before stable publication. Unit tests and successful
+builds do not satisfy those stable gates.
 
 ## Reconciliation
 
@@ -21,6 +24,20 @@ freshness checks while accepting the supported aggregate subsystem. A running
 heartbeat alone is not evidence of healthy metrics or successful recovery.
 
 ## Release evidence
+
+Testing and stable releases have separate gates. The local
+`scripts/testing_release.py` procedure verifies the existing signed APK and
+promotes the exact tested AMD64/ARM64 images without rebuilding or resigning.
+It requires `scripts/testing_release_gate.py` to pass, publishes only a canonical
+`X.Y.Z-beta.N` version, and creates a GitHub prerelease with `latest=false` and no
+`latest` image tag. Normal installation/update checks do not select a beta.
+Its separate manual hosted preflight is read-only. When local package-write
+credentials are unavailable, a gated draft transfer and checksum-bound annotated
+beta tag trigger the separate testing promotion workflow. That workflow imports
+and uploads the same OCI bytes with the repository token; it does not rebuild
+images or sign Android. No Android signing secrets are needed in GitHub for
+this testing delivery path. See [testing instructions
+and maintainer procedure](TESTING.md).
 
 Run `python3 scripts/stable_release_gate.py`. It fails closed until
 `docs/release-evidence/stable.json` contains every required real result, matches

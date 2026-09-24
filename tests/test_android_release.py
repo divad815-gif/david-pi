@@ -99,6 +99,8 @@ def release_fixture(
     write(root / "requirements.txt", "flask==3.1.2\n")
     write(root / "docker-entrypoint.sh", "#!/bin/sh\nexec \"$@\"\n")
     write(root / "modules/runtime.py", "VALUE = 'fixture'\n")
+    write(root / "installer/fixture.py", "VALUE = 'installer'\n")
+    write(root / "installer/tests/test_fixture.py", "VALUE = 'test-only'\n")
     write(root / "templates/index.html", "fixture\n")
     write(root / "static/app.js", "const fixture = true;\n")
     write(root / "assets/readme.txt", "fixture\n")
@@ -218,8 +220,9 @@ def candidate_image_fixture(root: Path, image_root: Path) -> Path:
         destination = image_root / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(root / relative, destination)
-    for relative in ("modules", "config", "templates", "static", "assets", "knowledge"):
-        shutil.copytree(root / relative, image_root / relative)
+    for relative in ("modules", "config", "installer", "templates", "static", "assets", "knowledge"):
+        shutil.copytree(root / relative, image_root / relative,
+                        ignore=shutil.ignore_patterns("tests") if relative == "installer" else None)
     entrypoint = image_root.parent / "docker-entrypoint"
     shutil.copyfile(root / "docker-entrypoint.sh", entrypoint)
     subprocess.run(["git", "init", "-q"], cwd=root, check=True)
@@ -1048,8 +1051,11 @@ def test_candidate_image_bundle_is_extracted_without_execution_and_matches_host(
     tmp_path, monkeypatch
 ):
     expected = attest(tmp_path, monkeypatch)
+    (tmp_path / ".gitignore").write_text("artifacts/android/\n")
     image_root = tmp_path / "candidate-image"
     entrypoint = candidate_image_fixture(tmp_path, image_root)
+    import py_compile
+    py_compile.compile(str(image_root / "installer/fixture.py"), dfile="/app/installer/fixture.py", doraise=True)
     commands = []
     container_id = "a" * 64
 
@@ -1075,6 +1081,23 @@ def test_candidate_image_bundle_is_extracted_without_execution_and_matches_host(
     assert [command[0] for command in commands].count("cp") == 2
     assert commands[-1] == ("rm", "-f", "-v", container_id)
     assert all(command[0] != "run" for command in commands)
+
+
+@pytest.mark.parametrize("problem", ["altered", "orphan", "unsupported"])
+def test_candidate_generated_cache_rejects_unverifiable_code(tmp_path, problem):
+    import py_compile
+    source = tmp_path / "fixture.py"
+    source.write_text("VALUE = 1\n")
+    cache = Path(py_compile.compile(str(source), dfile="/app/fixture.py", doraise=True))
+    if problem == "altered":
+        source.write_text("VALUE = 2\n")
+    elif problem == "orphan":
+        source.unlink()
+    else:
+        cache.rename(cache.with_name("fixture.unknown.pyc"))
+    files = android_image_release._tree_fingerprints(tmp_path, label="fixture", omit_python_cache=False)
+    with pytest.raises(AndroidReleaseError, match="generated Python cache"):
+        android_image_release._verified_generated_cache(tmp_path, files)
 
 
 def test_candidate_image_bundle_rejects_symlinked_member_before_parsing(tmp_path, monkeypatch):

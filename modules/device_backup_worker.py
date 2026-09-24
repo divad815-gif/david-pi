@@ -2,6 +2,15 @@
 
 from __future__ import annotations
 
+# A health probe must not import Flask, image decoders or backup task code.
+if __name__ == "__main__":
+    import sys
+
+    if sys.argv[1:] == ["--check-health"]:
+        from .worker_health import main as health_main
+
+        raise SystemExit(health_main("device-backup"))
+
 import argparse
 import fcntl
 import json
@@ -15,7 +24,7 @@ import time
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 
 from .device_backup import (
@@ -23,6 +32,7 @@ from .device_backup import (
     initialize_device_backup,
     secondary_verify_once,
 )
+from .worker_health import PRIVACY, check_health as heartbeat_health
 
 
 LOGGER = logging.getLogger(__name__)
@@ -267,18 +277,6 @@ def _utcnow() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _parse_time(value: object) -> datetime | None:
-    if not isinstance(value, str):
-        return None
-    try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except (TypeError, ValueError, OverflowError):
-        return None
-    if parsed.tzinfo is None:
-        return None
-    return parsed.astimezone(timezone.utc)
-
-
 def _write_health(config: Config, value: dict) -> None:
     root = config.runtime_root
     _identity(root, directory=True)
@@ -345,13 +343,7 @@ class HealthPublisher:
             "ready": ready,
             "reason": reason,
             "updated_at": _utcnow(),
-            "privacy": {
-                "contains_paths": False,
-                "contains_filenames": False,
-                "contains_user_content": False,
-                "contains_identities": False,
-                "contains_secrets": False,
-            },
+            "privacy": PRIVACY,
         }
 
     def publish(self) -> None:
@@ -375,23 +367,10 @@ class HealthPublisher:
 
 
 def check_health(config: Config) -> bool:
-    path = config.runtime_root / HEALTH_NAME
-    try:
-        if path.is_symlink() or not path.is_file() or path.stat().st_size > 4096:
-            return False
-        value = json.loads(path.read_text(encoding="utf-8"))
-        updated = _parse_time(value.get("updated_at"))
-        return (
-            value.get("schema_version") == 1
-            and value.get("worker") == "david-pi-device-backup-worker"
-            and value.get("ready") is True
-            and value.get("privacy", {}).get("contains_user_content") is False
-            and updated is not None
-            and datetime.now(timezone.utc) - updated
-            <= timedelta(seconds=HEALTH_MAX_AGE_SECONDS)
-        )
-    except (OSError, TypeError, ValueError, json.JSONDecodeError):
-        return False
+    return heartbeat_health(
+        "device-backup", config.runtime_root, os.geteuid(),
+        maximum_age=HEALTH_MAX_AGE_SECONDS,
+    )
 
 
 def run_cycle(config: Config, lease: Lease, progress) -> dict:

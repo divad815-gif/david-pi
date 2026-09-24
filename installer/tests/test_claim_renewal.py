@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import sys
 import threading
 import time
 import uuid
@@ -153,6 +154,95 @@ def test_expired_claim_keeps_saved_node_owner_distinct_from_setup_admin(pending,
     assert updated["admin"] == "john@example.test"
     assert updated["node_account"] == "owner@example.test"
     assert 890 < updated["expires"] - time.time() <= 900
+
+
+def test_correcting_initial_admin_rotates_authority_without_rebinding_server(pending, capsys):
+    controller, status, serve, calls = pending
+    path = controller.state / "setup.json"
+    previous = host.read_json(path)
+    previous.update(admin="typo@example.test", node_account="john@example.test", node_id="node-42", tailnet="example.test",
+                    claimed=True, session_hash=hashlib.sha256(b"old-session").hexdigest(), session_expires=time.time()+900, csrf="old-csrf")
+    status["Self"]["ID"] = "node-42"
+    status["CurrentTailnet"] = {"Name": "example.test"}
+    host.atomic_json(path, previous)
+    release = (controller.etc / "release.json").read_bytes()
+    old_serve = copy.deepcopy(serve)
+    host.renew_claim(controller, admin="JANE@example.test")
+    token = new_token(capsys)
+    updated = host.read_json(path)
+    assert updated["admin"] == "jane@example.test" and updated["claimed"] is False
+    assert not any(field in updated for field in ("session_hash", "session_expires", "csrf"))
+    for field in ("node_account", "node_id", "tailnet", "instance_id", "hostname", "origin", "timezone"):
+        assert updated[field] == previous[field]
+    assert (controller.etc / "release.json").read_bytes() == release and serve == old_serve
+    assert not any(args[:2] == ["tailscale", "set"] or args[0] in {"apt-get", "docker"} for args in calls)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), host.SetupHandler)
+    server.controller = controller
+    server.claim_lock = threading.Lock()
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    def request(login, claim=None, session=None):
+        connection = http.client.HTTPConnection("127.0.0.1", server.server_port)
+        headers = {"Host": ORIGIN.removeprefix("https://"), "Origin": ORIGIN, "Tailscale-User-Login": login, "Content-Type": "application/json"}
+        if session:
+            headers["Cookie"] = "dp_setup=" + session
+        connection.request("POST" if claim else "GET", "/api/claim" if claim else "/api/setup", body=json.dumps({"token": claim}) if claim else None, headers=headers)
+        response = connection.getresponse()
+        result = response.status, response.read()
+        connection.close()
+        return result
+    try:
+        assert request("jane@example.test", session="old-session")[0] == 403
+        assert request("typo@example.test", session="old-session")[0] == 403
+        assert request("typo@example.test", claim=token)[0] == 400
+        assert request("jane@example.test", claim="old-token")[0] == 400
+        assert request("jane@example.test", claim=token)[0] == 200
+        # Ordinary renewal still checks the original server owner, who can be
+        # different from the explicitly selected initial administrator.
+        host.renew_claim(controller)
+        new_token(capsys)
+        assert host.read_json(path)["admin"] == "jane@example.test"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+@pytest.mark.parametrize("problem", ["installed", "running", "node", "tailnet", "account", "invalid-login", "legacy-unverified-owner"])
+def test_admin_correction_cannot_bypass_existing_setup_boundaries(pending, problem):
+    controller, status, _, calls = pending
+    path = controller.state / "setup.json"
+    setup = host.read_json(path)
+    setup.update(node_account="john@example.test", node_id="node-42", tailnet="example.test")
+    status["Self"]["ID"] = "node-42"
+    status["CurrentTailnet"] = {"Name": "example.test"}
+    admin = "corrected@example.test"
+    if problem == "installed": controller.config_path.write_text("{}")
+    elif problem == "running": host.atomic_json(controller.jobs / "running.json", {"state": "running"})
+    elif problem == "node": status["Self"]["ID"] = "replacement-node"
+    elif problem == "tailnet": status["CurrentTailnet"]["Name"] = "other.example"
+    elif problem == "account": status["User"]["42"]["LoginName"] = "other@example.test"
+    elif problem == "invalid-login": admin = "not an email"
+    elif problem == "legacy-unverified-owner":
+        setup.pop("node_account")
+        setup["admin"] = "unknown-typo@example.test"
+    host.atomic_json(path, setup)
+    original = path.read_bytes()
+    with pytest.raises(host.HostError):
+        host.renew_claim(controller, admin=admin)
+    assert path.read_bytes() == original
+    assert not any("--set-path=/" in args for args in calls)
+
+
+def test_claim_admin_correction_remains_root_only():
+    script = """
+import os, sys
+from installer import host
+host.os.geteuid = lambda: 1000
+host.Controller = lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError('constructed controller before root check'))
+sys.argv = ['david-pi', 'renew-claim', '--admin', 'john@example.test']
+host.main()
+"""
+    result = subprocess.run([sys.executable, "-c", script], cwd=ROOT, capture_output=True, text=True)
+    assert result.returncode == 2 and "Run with sudo on the server" in result.stderr
 
 
 @pytest.mark.parametrize("configured,installed,expected", [(False, False, "renew-claim"), (True, False, "operation repair"), (True, True, "Already configured")])

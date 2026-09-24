@@ -7,6 +7,16 @@ content retention supports only ``off`` and read-only ``preview`` modes.
 
 from __future__ import annotations
 
+# Docker polls this command frequently under the worker's CPU limit. A probe
+# reads the last validated heartbeat without constructing the worker again.
+if __name__ == "__main__":
+    import sys
+
+    if sys.argv[1:] == ["--check-health"]:
+        from .worker_health import main as health_main
+
+        raise SystemExit(health_main("maintenance"))
+
 import argparse
 import fcntl
 import json
@@ -30,15 +40,9 @@ from .maintenance_observations import (
     load_server_status,
     metric_sample,
 )
+from .worker_health import PRIVACY as STATUS_PRIVACY, check_health as heartbeat_health
 
 
-STATUS_PRIVACY = {
-    "contains_paths": False,
-    "contains_filenames": False,
-    "contains_user_content": False,
-    "contains_identities": False,
-    "contains_secrets": False,
-}
 ALLOWED_ERROR_CODES = {
     "none",
     "configuration_invalid",
@@ -1102,49 +1106,14 @@ def run_forever(config: Config, stop: Event | None = None) -> int:
 def check_health(
     config: Config, maximum_age: int = 90, now: float | None = None
 ) -> bool:
-    runtime = None
     try:
         validate_config(config)
-        runtime = PinnedDirectory(
-            config.runtime_root, config.operations_uid, private=True
+        return heartbeat_health(
+            "maintenance", config.runtime_root, config.operations_uid,
+            maximum_age=maximum_age, now=now,
         )
-        descriptor, identity = runtime.open_regular(
-            HEARTBEAT_NAME, os.O_RDONLY, create=False
-        )
-        try:
-            raw = os.read(descriptor, 65537)
-            if len(raw) > 65536:
-                return False
-        finally:
-            os.close(descriptor)
-        if runtime.regular_identity(HEARTBEAT_NAME) != identity:
-            return False
-        payload = json.loads(raw.decode("utf-8"))
-        updated = datetime.fromisoformat(
-            str(payload.get("updated_at", "")).replace("Z", "+00:00")
-        )
-        if updated.tzinfo is None or updated.utcoffset() is None:
-            return False
-        age = (now if now is not None else time.time()) - updated.timestamp()
-        return (
-            payload.get("schema_version") == 2
-            and payload.get("worker") == "david-pi-maintenance"
-            and payload.get("privacy") == STATUS_PRIVACY
-            and payload.get("state") == "healthy"
-            and -5 <= age <= maximum_age
-        )
-    except (
-        OSError,
-        ValueError,
-        TypeError,
-        UnicodeDecodeError,
-        json.JSONDecodeError,
-        MaintenanceError,
-    ):
+    except (ValueError, TypeError, MaintenanceError):
         return False
-    finally:
-        if runtime is not None:
-            runtime.close()
 
 
 def main(argv: list[str] | None = None) -> int:

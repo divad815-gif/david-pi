@@ -39,6 +39,29 @@ dp_install_packages() {
   systemctl enable --now tailscaled
 }
 
+dp_install_host_files() {
+  local release_root="/usr/local/lib/david-pi-releases/$DP_VERSION" pointer="/usr/local/lib/.david-pi-pointer-$$" release_stage="/usr/local/lib/david-pi-releases/.new-$$"
+  if [[ -e /usr/local/lib/david-pi && ! -L /usr/local/lib/david-pi ]]; then
+    dp_die "A legacy host-code directory exists. Use the separately rehearsed migration; it was preserved"
+  fi
+  install -d -m 0755 /usr/local/lib/david-pi-releases
+  if [[ ! -e "$release_root" ]]; then
+    install -d -m 0755 "$release_stage"
+    rsync -a --exclude .git --exclude '__pycache__' --exclude '.venv' --exclude '.env' --exclude 'clients/android/.gradle' --exclude 'clients/android/**/build' "$DP_ROOT/" "$release_stage/"
+    mv -T -- "$release_stage" "$release_root"
+  fi
+  [[ -x "$release_root/david-pi" ]] || dp_die "Installed release is incomplete; inspect $release_root before retrying"
+  ln -s -- "$release_root" "$pointer"
+  mv -Tf -- "$pointer" /usr/local/lib/david-pi
+  ln -sfn /usr/local/lib/david-pi/david-pi /usr/local/bin/david-pi
+  install -d -m 0755 /run/david-pi
+  printf '%s\n' '{"schema_version":1,"overall_state":"unavailable","subsystems":{}}' > /run/david-pi/server-status.json
+  for name in david-pi-helper.service david-pi-portal.service david-pi-status.service david-pi-status.timer; do
+    install -m 0644 "$DP_ROOT/installer/systemd/$name" "/etc/systemd/system/$name"
+  done
+  systemctl daemon-reload
+}
+
 dp_setup() {
   dp_require_root
   umask 077
@@ -63,6 +86,7 @@ dp_setup() {
     python3 "$DP_ROOT/installer/host.py" --etc "$DP_ETC" address
     return
   fi
+  [[ ! -f "$DP_ETC/host-state/recovery.json" ]] || dp_die "This machine is prepared for recovery. Run sudo david-pi restore; no new household was created"
   if [[ -f "$DP_ETC/host-state/setup.json" ]]; then
     (( supplied_options == 0 )) || dp_die "Setup is already waiting to be claimed. Run sudo david-pi setup without options to renew its code and keep the saved account and address"
     python3 "$DP_ROOT/installer/host.py" --etc "$DP_ETC" renew-claim
@@ -113,25 +137,6 @@ dp_setup() {
   if ss -ltnH | awk '{print $4}' | grep -Eq '(^|:)8090$' && ! systemctl is-active -q david-pi-portal.service; then
     dp_die "Local port 8090 is already in use; existing service was preserved"
   fi
-  local release_root="/usr/local/lib/david-pi-releases/$DP_VERSION" pointer="/usr/local/lib/.david-pi-pointer-$$" release_stage="/usr/local/lib/david-pi-releases/.new-$$"
-  if [[ -e /usr/local/lib/david-pi && ! -L /usr/local/lib/david-pi ]]; then
-    dp_die "A legacy host-code directory exists. Use the separately rehearsed migration; it was preserved"
-  fi
-  install -d -m 0755 /usr/local/lib/david-pi-releases
-  if [[ ! -e "$release_root" ]]; then
-    install -d -m 0755 "$release_stage"
-    rsync -a --exclude .git --exclude '__pycache__' --exclude '.venv' --exclude '.env' --exclude 'clients/android/.gradle' --exclude 'clients/android/**/build' "$DP_ROOT/" "$release_stage/"
-    mv -T -- "$release_stage" "$release_root"
-  fi
-  [[ -x "$release_root/david-pi" ]] || dp_die "Installed release is incomplete; inspect $release_root before retrying"
-  ln -s -- "$release_root" "$pointer"
-  mv -Tf -- "$pointer" /usr/local/lib/david-pi
-  ln -sfn /usr/local/lib/david-pi/david-pi /usr/local/bin/david-pi
-  install -d -m 0755 /run/david-pi
-  printf '%s\n' '{"schema_version":1,"overall_state":"unavailable","subsystems":{}}' > /run/david-pi/server-status.json
-  for name in david-pi-helper.service david-pi-portal.service david-pi-status.service david-pi-status.timer; do
-    install -m 0644 "$DP_ROOT/installer/systemd/$name" "/etc/systemd/system/$name"
-  done
-  systemctl daemon-reload
+  dp_install_host_files
   python3 /usr/local/lib/david-pi/installer/host.py initialize --admin "$admin" --hostname "$hostname" --image "$image" --repository "$repository"
 }

@@ -1,8 +1,14 @@
 # Install your private home server
 
-This guide describes the portable 10.0.0 release. It remains an unpublished
-candidate until the [release gates](RELEASE.md) pass. There is no new public
-download to install yet. Older public downloads do not follow this guide.
+This guide describes the portable home server. Stable publication still requires
+all [release acceptance checks](RELEASE.md). Friends testing an explicitly
+published beta should use that beta's pinned installer and [testing instructions](TESTING.md);
+`latest` always selects stable releases. Older public 9.x downloads do not follow
+this guide.
+
+**Replacing a failed server from a backup?** Follow [clean-machine recovery](RECOVERY.md#prepare-the-clean-target)
+instead of creating a new home. Its `--prepare-recovery` installer installs the
+required tools without creating a new household or claim code.
 
 ## Know which screen to use
 
@@ -53,7 +59,7 @@ Keep the Tailscale admin console open in your browser.
 
 ## 3. Run the verified bootstrap on the server
 
-Once this stable release is published, run this in an interactive **server
+For a published stable portable release, run this in an interactive **server
 terminal** where you can answer prompts. A local keyboard or SSH session works;
 an unattended script does not provide the required conversation.
 
@@ -67,6 +73,11 @@ system's package manager first. For inspection before execution, download
 `sha256sum -c install.sh.sha256`, read the script, then run `sudo bash install.sh`.
 The checksum confirms download integrity; the publisher and HTTPS channel
 remain part of the trust model.
+
+An explicitly published beta uses the installer attached to that exact beta,
+for example the `v10.0.0-beta.1` release asset, rather than the `latest` URL.
+A beta-specific installer pins its version. A normal latest installer refuses
+to select a beta silently. Check the release page for the supported test scope.
 
 The terminal first shows download, machine-check and package-installation
 messages. It installs missing prerequisites from official package sources.

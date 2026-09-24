@@ -3,7 +3,10 @@ set -Eeuo pipefail
 
 # The release workflow replaces this token in the published installer asset.
 REPOSITORY="${DAVID_PI_REPOSITORY:-__GITHUB_REPOSITORY__}"
-RELEASE_VERSION="${DAVID_PI_VERSION:-latest}"
+RENDERED_VERSION="__RELEASE_VERSION__"
+[[ "$RENDERED_VERSION" != *'__'* ]] || RENDERED_VERSION=latest
+RELEASE_VERSION="${DAVID_PI_VERSION:-$RENDERED_VERSION}"
+MODE=setup
 TEST_MODE="${DAVID_PI_BOOTSTRAP_TEST_MODE:-0}"
 WORK=''
 
@@ -11,6 +14,16 @@ say() { printf '%s\n' "$*"; }
 fail() { printf 'David-Pi bootstrap: %s\n' "$*" >&2; exit 1; }
 cleanup() { [[ -z "$WORK" ]] || rm -rf -- "$WORK"; }
 trap cleanup EXIT INT TERM HUP
+
+case "${1:-}" in
+  '') ;;
+  --prepare-recovery) MODE=prepare-recovery; shift ;;
+  *) fail "unknown option; use --prepare-recovery for a replacement machine" ;;
+esac
+(( $# == 0 )) || fail "unexpected installer arguments"
+CANONICAL_VERSION='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-beta\.[1-9][0-9]*)?$'
+[[ "$RELEASE_VERSION" == latest || "$RELEASE_VERSION" =~ $CANONICAL_VERSION ]] || fail "invalid DAVID_PI_VERSION; select an exact stable or beta version"
+
 
 [[ "$REPOSITORY" != *'__'* ]] || fail "this source template is not a rendered release asset; set DAVID_PI_REPOSITORY=OWNER/david-pi or download install.sh from a release"
 [[ "$REPOSITORY" =~ ^[A-Za-z0-9_.-]+/david-pi$ ]] || fail "invalid GitHub repository name"
@@ -44,7 +57,7 @@ if [[ -n "${DAVID_PI_DOWNLOAD_BASE:-}" ]]; then
   [[ "$DOWNLOAD_BASE" == https://* || "$TEST_MODE" == 1 ]] || fail "custom download base must use HTTPS"
 elif [[ "$RELEASE_VERSION" == latest ]]; then
   DOWNLOAD_BASE="https://github.com/$REPOSITORY/releases/latest/download"
-elif [[ "$RELEASE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-.][A-Za-z0-9_.-]+)?$ ]]; then
+elif [[ "$RELEASE_VERSION" =~ $CANONICAL_VERSION ]]; then
   DOWNLOAD_BASE="https://github.com/$REPOSITORY/releases/download/v$RELEASE_VERSION"
 else
   fail "invalid DAVID_PI_VERSION"
@@ -68,7 +81,8 @@ VERSION="$(manifest_value VERSION)"
 ARCHIVE="$(manifest_value ARCHIVE)"
 ARCHIVE_SHA256="$(manifest_value ARCHIVE_SHA256)"
 IMAGE="$(manifest_value IMAGE)"
-[[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-.][A-Za-z0-9_.-]+)?$ ]] || fail "manifest has an invalid version"
+[[ "$VERSION" =~ $CANONICAL_VERSION ]] || fail "manifest has an invalid version"
+[[ "$RELEASE_VERSION" != latest || "$VERSION" != *-beta.* ]] || fail "latest cannot select a testing release; choose its exact published version explicitly"
 [[ "$ARCHIVE" == "david-pi-$VERSION.tar.gz" ]] || fail "manifest has an invalid archive name"
 [[ "$ARCHIVE_SHA256" =~ ^[0-9a-f]{64}$ ]] || fail "manifest has an invalid archive checksum"
 [[ "$IMAGE" =~ ^ghcr\.io/[a-z0-9_.-]+/david-pi@sha256:[0-9a-f]{64}$ ]] || fail "manifest image is not an immutable GHCR digest"
@@ -111,6 +125,14 @@ if [[ "${DAVID_PI_BOOTSTRAP_VERIFY_ONLY:-0}" == 1 ]]; then
   exit 0
 fi
 
+# A bootstrap is for a new or unclaimed machine. Never replace an installed
+# household's CLI before the snapshot-protected updater/repair decides its work.
+EXISTING_CONFIG=/etc/david-pi/installation.json
+if [[ "$TEST_MODE" == 1 ]]; then EXISTING_CONFIG="${DAVID_PI_BOOTSTRAP_EXISTING_CONFIG:-$WORK/no-existing-installation}"; fi
+if [[ -f "$EXISTING_CONFIG" ]]; then
+  fail "this home is already installed; use sudo david-pi update (or an explicitly selected beta update), or sudo david-pi setup to resume services. Existing host code and CLI were preserved"
+fi
+
 # Keep a verified copy of the installer available if guided setup deliberately
 # stops on a blank disk.  The user must be able to run `david-pi
 # prepare-storage` and then resume without downloading an unverified or
@@ -130,6 +152,13 @@ cp -a -- "$ROOT" "$BOOTSTRAP_STAGE"
 rm -rf -- "$BOOTSTRAP_ROOT"
 mv -- "$BOOTSTRAP_STAGE" "$BOOTSTRAP_ROOT"
 chmod 0755 "$BOOTSTRAP_ROOT/david-pi"
+# Preserve the verified selection for clean recovery and interrupted setup.
+python3 - "$WORK/release-manifest.txt" "$BOOTSTRAP_ROOT/verified-release.json" "$REPOSITORY" "$RELEASE_VERSION" <<'PYRECEIPT'
+import json,os,pathlib,sys
+path=pathlib.Path(sys.argv[2])
+path.write_text(json.dumps({"manifest":pathlib.Path(sys.argv[1]).read_text(),"repository":sys.argv[3],"selected_version":sys.argv[4]})+"\n")
+os.chmod(path,0o600)
+PYRECEIPT
 ln -sfn -- "$BOOTSTRAP_ROOT/david-pi" "$CLI_LINK"
 
 export DAVID_PI_IMAGE_OVERRIDE="$IMAGE"
@@ -137,9 +166,9 @@ export DAVID_PI_REPOSITORY="$REPOSITORY"
 # A piped bootstrap uses standard input for shell source. Interactive setup
 # must read the person's terminal instead of consuming that source or its EOF.
 if [[ -t 0 ]]; then
-  "$BOOTSTRAP_ROOT/david-pi" setup
+  "$BOOTSTRAP_ROOT/david-pi" "$MODE"
 elif { true </dev/tty; } 2>/dev/null; then
-  "$BOOTSTRAP_ROOT/david-pi" setup </dev/tty
+  "$BOOTSTRAP_ROOT/david-pi" "$MODE" </dev/tty
 else
   fail "guided setup needs an interactive terminal. Open a terminal on the server (or an interactive SSH session) and run the verified installer there."
 fi

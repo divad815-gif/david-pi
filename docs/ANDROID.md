@@ -2,10 +2,13 @@
 
 ![Private household access and separate backup storage](images/private-home.svg)
 
-Use the signed **David-Pi** APK attached to the same stable GitHub release as the
-server. A new portable APK remains unpublished until signing continuity and
-real-device acceptance pass. Do not install a developer debug APK as an update
-to your household app.
+Use the signed **David-Pi** APK attached to the same GitHub release as the
+server. The [testing prerelease](TESTING.md) includes the companion so testers
+can check real-phone installation, background backups, offline listening and
+updates. Its signing identity is retained; those field checks remain pending
+until testers report their results. Do not install a developer debug APK as an
+update to your household app. The steps below describe the intended behavior
+and what to check when sharing beta feedback.
 
 Before pairing, update **Android System WebView** and **Chrome** through your
 phone’s app store. Android uses its installed web component to show the portal;

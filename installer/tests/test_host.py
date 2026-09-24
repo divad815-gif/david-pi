@@ -808,16 +808,17 @@ def test_install_progress_reports_readiness_before_opening_private_website(recon
     assert phases == ["preparing selected storage", "saving local keys and module settings", "starting selected services", "checking selected services", "opening your home server"]
 
 
-def fresh_install_with_unit(reconnect_host, monkeypatch, failure=None):
+def fresh_install_with_unit(reconnect_host, monkeypatch, failure=None, operation="install", unit_state=None):
     """Exercise real readiness and the shipped unit's startup command boundary."""
     import installer.host as host
     controller, serve, _, origin = reconnect_host
-    cfg, perform = configured_operation(reconnect_host, monkeypatch, "install")
+    cfg, perform = configured_operation(reconnect_host, monkeypatch, operation)
     serve["Web"][origin.removeprefix("https://") + ":443"]["Handlers"]["/"] = {"Proxy": "http://127.0.0.1:8091"}
     unit = (Path(host.ROOT) / "installer/systemd/david-pi-portal.service").read_text()
     unit_commands = [shlex.split(line.partition("=")[2]) for line in unit.splitlines() if line.startswith(("ExecStartPre=", "ExecStart="))]
     starts = [command for command in unit_commands if Path(command[0]).name == "docker"]
     assert len(starts) == 1 and "--wait" in starts[0] and "--remove-orphans" in starts[0]
+    assert "--force-recreate" not in starts[0]
     assert "--wait-timeout" in starts[0] and "--no-block" not in starts[0]
     assert any(command[-1] == "storage-guard" for command in unit_commands)
     assert "Type=oneshot" in unit
@@ -828,8 +829,12 @@ def fresh_install_with_unit(reconnect_host, monkeypatch, failure=None):
             events.append("unit-start")
             assert controller.config_path.exists() and controller.compose_path.exists()
             original_runner(args, **kwargs)
+            if failure == "unit":
+                raise HostError("Selected service unit failed its startup checks")
             for command in unit_commands:
                 runner(command)
+            if unit_state is not None:
+                unit_state.update(active="active", sub="exited", result="success")
             return ""
         if Path(args[0]).name == "docker" and "up" in args:
             events.append("compose-up")
@@ -895,3 +900,37 @@ def test_repair_still_deliberately_recreates_selected_services(reconnect_host, m
     starts = [call for call in controller.calls if call[0] == "docker" and "up" in call]
     assert len(starts) == 1
     assert "--force-recreate" in starts[0] and "--wait" in starts[0]
+
+
+def test_repair_recovers_failed_unit_before_readiness_and_portal_handoff(reconnect_host, monkeypatch):
+    unit_state = {"active": "failed", "sub": "failed", "result": "exit-code"}
+    controller, _, cfg, perform, events = fresh_install_with_unit(
+        reconnect_host, monkeypatch, operation="repair", unit_state=unit_state,
+    )
+    configuration = controller.config_path.read_bytes()
+    atomic_json(controller.state / "pending-install.json", cfg)
+    assert perform()["ready"] is True
+    assert unit_state == {"active": "active", "sub": "exited", "result": "success"}
+    assert events == ["compose-up", "unit-start", "compose-up", "service-readiness", "application-readiness", "open-home"]
+    # Repair deliberately recreates once; the systemd unit's second check uses
+    # its shipped, non-recreating command and establishes successful unit state.
+    recreates = [call for call in controller.calls if "up" in call and "--force-recreate" in call]
+    assert len(recreates) == 1
+    assert controller.config_path.read_bytes() == configuration
+    assert not (controller.state / "pending-install.json").exists()
+    assert json.loads((controller.state / "installed.json").read_text())["instance_id"] == cfg["instance_id"]
+
+
+@pytest.mark.parametrize("failure", ["startup", "unit", "worker", "application"])
+def test_repair_failure_does_not_complete_or_open_portal(reconnect_host, monkeypatch, failure):
+    controller, serve, cfg, perform, events = fresh_install_with_unit(
+        reconnect_host, monkeypatch, failure=failure, operation="repair",
+    )
+    original_serve = copy.deepcopy(serve)
+    atomic_json(controller.state / "pending-install.json", cfg)
+    with pytest.raises(HostError):
+        perform()
+    assert serve == original_serve and "open-home" not in events
+    assert controller.config() == cfg
+    assert json.loads((controller.state / "pending-install.json").read_text()) == cfg
+    assert not (controller.state / "installed.json").exists()

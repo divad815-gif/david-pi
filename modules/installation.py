@@ -162,12 +162,17 @@ def validate_installation(data: Mapping) -> dict:
     if not any(m["role"] == "admin" for m in members):
         raise InstallationError("Keep at least one household administrator.")
     storage = data.get("storage")
-    if not isinstance(storage, Mapping) or storage.get("mode") not in {"folder", "drive"} or set(storage) - {"mode", "data_root", "backup_root"}:
+    if not isinstance(storage, Mapping) or storage.get("mode") not in {"folder", "drive"} or set(storage) - {"mode", "data_root", "backup_root", "update_snapshot_root"}:
         raise InstallationError("Choose folder or drive storage.")
     data_root = _absolute_path(storage.get("data_root"), "data directory")
     backup_root = _absolute_path(storage["backup_root"], "backup directory") if storage.get("backup_root") else None
     if backup_root and (Path(backup_root) == Path(data_root) or Path(backup_root).is_relative_to(data_root) or Path(data_root).is_relative_to(backup_root)):
         raise InstallationError("Choose a backup location separate from application data.")
+    update_snapshot_root = _absolute_path(storage["update_snapshot_root"], "update recovery directory") if storage.get("update_snapshot_root") else None
+    if update_snapshot_root:
+        for other in (data_root, backup_root):
+            if other and (Path(update_snapshot_root).is_relative_to(other) or Path(other).is_relative_to(update_snapshot_root)):
+                raise InstallationError("Keep update recovery storage separate from application data and independent backups.")
     modes = data.get("modules", {})
     if not isinstance(modes, Mapping) or set(modes) - MODULES.keys():
         raise InstallationError("Unknown application module.")
@@ -187,7 +192,8 @@ def validate_installation(data: Mapping) -> dict:
     return {"schema_version": SCHEMA_VERSION, "instance_id": instance_id,
             "display_name": _text(data.get("display_name"), "website name", 80), "hostname": hostname,
             "public_url": validate_origin(data.get("public_url")), "timezone": timezone, "country": country,
-            "members": members, "storage": {"mode": storage["mode"], "data_root": data_root, "backup_root": backup_root},
+            "members": members, "storage": {"mode": storage["mode"], "data_root": data_root, "backup_root": backup_root,
+                **({"update_snapshot_root": update_snapshot_root} if "update_snapshot_root" in storage else {})},
             "modules": modes, "integrations": {"web_push": integrations.get("web_push", False)}}
 
 

@@ -48,9 +48,10 @@ SYSTEMD_ROOT = Path("/etc/systemd/system")
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 from modules.installation import InstallationError, MODULES, selected_modules, selected_substrates, selected_workers, validate_installation, validate_origin
+from installer import update_storage, recovery
 
 IMAGE = re.compile(r"^ghcr\.io/[a-z0-9_.-]+/david-pi@sha256:[0-9a-f]{64}$")
-VERSION = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
+VERSION = re.compile(r"^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-beta\.[1-9][0-9]*)?$")
 REPOSITORY = re.compile(r"^[A-Za-z0-9_.-]+/david-pi$")
 SECRET_NAMES = {"TMDB_API_READ_TOKEN", "THEMEALDB_API_KEY", "PIHOLE_API_PASSWORD"}
 
@@ -119,7 +120,7 @@ def saved_address(etc):
     root = Path(etc)
     try:
         config = read_json(root / "installation.json")
-        setup = read_json(root / "host-state/setup.json", {}) if config is None else {}
+        setup = (read_json(root / "host-state/setup.json") or read_json(root / "host-state/recovery.json", {})) if config is None else {}
     except (OSError, ValueError):
         raise HostError("The saved private address cannot be read; inspect local configuration before continuing") from None
     if (config is not None and not isinstance(config, dict)) or not isinstance(setup, dict):
@@ -170,7 +171,7 @@ def validate_archive(archive, destination):
         bundle.extractall(destination, members=members, filter="data")
 
 
-def parse_manifest(text, repository):
+def parse_manifest(text, repository, *, allow_prerelease=False):
     if not REPOSITORY.fullmatch(repository) or len(text) > 4096:
         raise HostError("Invalid release source")
     fields = {}
@@ -181,8 +182,8 @@ def parse_manifest(text, repository):
         if not separator or key in fields:
             raise HostError("Invalid release manifest")
         fields[key] = value
-    if not VERSION.fullmatch(fields.get("VERSION", "")):
-        raise HostError("Only stable releases can be installed")
+    if not VERSION.fullmatch(fields.get("VERSION", "")) or ("-" in fields["VERSION"] and not allow_prerelease):
+        raise HostError("Only stable releases can be installed unless an exact testing release was explicitly selected")
     if fields.get("ARCHIVE") != f"david-pi-{fields['VERSION']}.tar.gz" or not re.fullmatch("[0-9a-f]{64}", fields.get("ARCHIVE_SHA256", "")):
         raise HostError("Invalid release checksum metadata")
     if not IMAGE.fullmatch(fields.get("IMAGE", "")) or not fields["IMAGE"].startswith(f"ghcr.io/{repository.lower()}@"):
@@ -344,7 +345,8 @@ class Controller:
         values = read_json(self.etc / "secrets/integrations.json", {})
         jobs = sorted((read_json(p) for p in self.jobs.glob("*.json")), key=lambda x: x["created_at"], reverse=True)[:20]
         return {"configuration": cfg, "release": self.release(), "integrations": {key: bool(values.get(key)) for key in SECRET_NAMES}, "jobs": jobs,
-                "backup": read_json(self.state / "backup-status.json", {"state": "not_configured" if not cfg["storage"].get("backup_root") else "restore_unverified"})}
+                "backup": read_json(self.state / "backup-status.json", {"state": "not_configured" if not cfg["storage"].get("backup_root") else "restore_unverified"}),
+                "update_recovery": self.update_snapshot_status()}
 
     def dispatch(self, operation, payload, identity, local=False):
         if not local:
@@ -369,6 +371,11 @@ class Controller:
             return self.test_integration(payload)
         if operation not in {"settings", "update", "backup", "restore_test", "repair"} or (operation == "repair" and not local):
             raise HostError("Unsupported management operation")
+        if operation == "update" and "testing_version" in payload:
+            version = payload["testing_version"]
+            if (not local or not isinstance(version, str) or not VERSION.fullmatch(version)
+                    or '-beta.' not in version or set(payload) != {"testing_version"}):
+                raise HostError("A testing update requires the exact beta version selected locally with sudo david-pi update --version")
         return self.enqueue(operation, payload)
 
     def metrics_history(self, payload):
@@ -930,7 +937,7 @@ class Controller:
             raise HostError("Only names, household members, locale, modules and integrations can change online. Storage/address changes require local recovery")
         if "storage" in changes:
             incoming_storage = changes["storage"]
-            if not isinstance(incoming_storage, dict) or set(incoming_storage) - {"backup_root", "data_root", "mode"}:
+            if not isinstance(incoming_storage, dict) or set(incoming_storage) - {"backup_root", "data_root", "mode", "update_snapshot_root"}:
                 raise HostError("Invalid backup storage setting")
             if incoming_storage.get("data_root", old["storage"]["data_root"]) != old["storage"]["data_root"] or incoming_storage.get("mode", old["storage"]["mode"]) != old["storage"]["mode"]:
                 raise HostError("Application storage changes require local recovery")
@@ -946,6 +953,8 @@ class Controller:
         backup_changed = updated["storage"].get("backup_root") != old["storage"].get("backup_root")
         if backup_changed:
             self.provision_backup(updated)
+        if updated["storage"].get("update_snapshot_root") != old["storage"].get("update_snapshot_root"):
+            self.update_snapshot_storage(updated, create=True)
         credentials_path = self.etc / "secrets/integrations.json"
         previous_credentials = read_json(credentials_path)
         backup_status_path = self.state / "backup-status.json"
@@ -981,18 +990,115 @@ class Controller:
             self.docker("up", "-d", "--remove-orphans", "--force-recreate", "--wait", "--wait-timeout", "180")
             raise
 
+    def update_snapshot_storage(self, cfg=None, *, create=False):
+        cfg = cfg or self.config()
+        data = Path(cfg["storage"]["data_root"])
+        root = Path(cfg["storage"].get("update_snapshot_root") or data.parent / ("david-pi-recovery-" + cfg["instance_id"]))
+        root = safe_path(root, exists=False)
+        for parent in (root.parent, *root.parent.parents):
+            if parent.stat().st_uid in {10001, 10002}:
+                raise HostError("Update recovery storage cannot be inside a directory controlled by an application worker")
+        if stat.S_IMODE(root.parent.stat().st_mode) & 0o022:
+            raise HostError("Choose an update recovery parent folder that is not writable by a group or other users")
+        for other in (data, cfg["storage"].get("backup_root")):
+            if other and (root.is_relative_to(other) or Path(other).is_relative_to(root)):
+                raise HostError("Update recovery storage must be outside the library and independent backup folders")
+        info = self.inspect_storage(root.parent)
+        binding_path = self.state / "update-storage.json"
+        bindings = read_json(binding_path, {})
+        if str(root) in bindings and bindings[str(root)] != info["uuid"]:
+            raise HostError("The configured update recovery drive is missing or has changed; reconnect its original filesystem")
+        marker = root / ".david-pi-update-recovery"
+        expected = {"instance_id": cfg["instance_id"], "uuid": info["uuid"]}
+        if root.exists():
+            try:
+                update_storage.private_directory(root)
+            except update_storage.SnapshotError as error:
+                raise HostError(str(error)) from None
+            if marker.is_symlink() or read_json(marker, {}) != expected:
+                raise HostError("Update recovery folder belongs to another installation or its drive has changed")
+        elif create:
+            root.mkdir(mode=0o700)
+            atomic_json(marker, expected)
+        if create:
+            atomic_json(binding_path, {**bindings, str(root): info["uuid"]})
+        return root
+
+    def update_snapshot_status(self):
+        cfg = self.config()
+        data = Path(cfg["storage"]["data_root"])
+        path = Path(cfg["storage"].get("update_snapshot_root") or data.parent / ("david-pi-recovery-" + cfg["instance_id"]))
+        result = {"path": str(path), "default": not cfg["storage"].get("update_snapshot_root"),
+                  "independent_backup": False, "snapshots": [], "retention": "Latest successful update plus failed or interrupted attempts"}
+        try:
+            root = self.update_snapshot_storage()
+            result["free_bytes"] = shutil.disk_usage(root if root.exists() else root.parent).free
+            if root.exists():
+                result["snapshots"] = [{"id": item.name, "created_at": value["created_at"], "complete": True,
+                    "version": value.get("release", {}).get("version"), "copied_bytes": value.get("copied_bytes"),
+                    "reused_bytes": value.get("reused_bytes"),
+                    "job_state": read_json(self.jobs / (item.name + ".json"), {}).get("state", "unknown")}
+                    for item, value in update_storage.records(root, cfg["instance_id"])]
+                result["snapshots"].extend({"id": item.name, "complete": False,
+                    "created_at": job.get("created_at"), "job_state": job["state"]}
+                    for item, job in update_storage.incomplete_records(root, self.jobs))
+        except (HostError, update_storage.SnapshotError, OSError, ValueError) as error:
+            result["error"] = str(error)
+        return result
+
+    def remove_update_snapshot(self, identifier):
+        if not isinstance(identifier, str) or not re.fullmatch("[0-9a-f]{32}", identifier):
+            raise HostError("Choose the exact update snapshot ID shown by update-snapshots")
+        root = self.update_snapshot_storage()
+        try:
+            choices = {p.name: p for p, _ in update_storage.records(root, self.config()["instance_id"])}
+            choices.update({p.name: p for p, _ in update_storage.incomplete_records(root, self.jobs)})
+        except update_storage.SnapshotError as error:
+            raise HostError(str(error)) from None
+        target = choices.get(identifier)
+        if target is None:
+            raise HostError("Snapshot not found or its incomplete copy is not a recorded failed/interrupted update; review it locally")
+        if any(p.is_symlink() for p in target.rglob("*")):
+            raise HostError("Update snapshot contains links; review it locally")
+        shutil.rmtree(target)
+        return {"removed": identifier, "content_preserved": True, "message": "Only the selected local update snapshot was removed"}
+
     def snapshot(self, destination, job, independent=False):
         cfg = self.config()
         self.storage_guard()
         source = Path(cfg["storage"]["data_root"])
         destination = Path(destination)
-        size = sum(path.stat().st_size for path in source.rglob("*") if path.is_file() and not path.is_symlink())
+        if destination.is_relative_to(source) or source.is_relative_to(destination):
+            raise HostError("A recovery snapshot must be outside the live application tree")
         destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        if shutil.disk_usage(destination.parent).free < size + 1024**3:
-            raise HostError("Not enough space for a complete recovery snapshot plus 1 GiB reserve")
+        if shutil.disk_usage(destination.parent).free < 1024**3:
+            raise HostError("Recovery storage needs at least 1 GiB free before snapshot preparation")
         self.phase(job, "stopping writes for consistent snapshot")
         try:
             self.docker("stop")
+            self.phase(job, "checking recovery space and reusable snapshot files")
+            previous = None
+            if not independent:
+                candidates = update_storage.records(destination.parent, cfg["instance_id"])
+                previous = candidates[0] if candidates else None
+            reusable, copied_bytes, reused_bytes = update_storage.copy_plan(source, previous)
+            metadata_bytes = sum(path.stat().st_size for path in (self.etc / "secrets").rglob("*") if path.is_file())
+            metadata_bytes += sum((self.etc / name).stat().st_size for name in ("installation.json", "compose.json", "release.json", "runtime.env"))
+            # Reserve another database-sized copy for SQLite's consistent backup
+            # and 1 GiB for manifests, journal state and the filesystem.
+            database_bytes = 0
+            for path in source.rglob("*"):
+                if path.is_file() and path.suffix in {".db", ".sqlite", ".sqlite3"}:
+                    database_bytes += path.stat().st_size
+                    wal = path.with_name(path.name + "-wal")
+                    # Committed pages can exist only in WAL after an unclean
+                    # stop. SQLite's temporary backup includes those pages while
+                    # the copied WAL still occupies space beside it.
+                    if wal.is_file():
+                        database_bytes += wal.stat().st_size
+            required = copied_bytes + metadata_bytes + database_bytes + 1024**3
+            if shutil.disk_usage(destination.parent).free < required:
+                raise HostError(f"Update/backup recovery storage needs {required} free bytes for new snapshot content and a 1 GiB reserve. Free space or choose another prepared local update recovery folder in Settings; existing snapshots were preserved")
             self.phase(job, "copying application data and recovery keys")
             destination.mkdir(mode=0o700)
             # Refuse symlinks: backups must not read outside managed storage.
@@ -1002,7 +1108,7 @@ class Controller:
             for original in [source, *source.rglob("*")]:
                 metadata = original.stat()
                 ownership[str(original.relative_to(source))] = [metadata.st_uid, metadata.st_gid, stat.S_IMODE(metadata.st_mode)]
-            shutil.copytree(source, destination / "data", copy_function=shutil.copy2, symlinks=True)
+            shutil.copytree(source, destination / "data", copy_function=update_storage.copy_function(reusable), symlinks=True)
             if any(p.is_symlink() for p in (destination / "data").rglob("*")):
                 raise HostError("Storage changed during backup; no symlinks are accepted")
             # SQLite's backup API incorporates any committed WAL frames into
@@ -1020,14 +1126,17 @@ class Controller:
             shutil.copy2(self.state / "storage.json", destination / "storage.json")
             for name in ("installation.json", "compose.json", "release.json", "runtime.env"):
                 shutil.copy2(self.etc / name, destination / name)
+            atomic_json(destination / "host-job.json", job)
             hashes = {}
             for path in destination.rglob("*"):
                 if path.is_file():
                     with path.open("rb") as stream:
                         hashes[str(path.relative_to(destination))] = hashlib.file_digest(stream, "sha256").hexdigest()
-            atomic_json(destination / "snapshot.json", {"instance_id": cfg["instance_id"], "created_at": time.time(), "release": self.release(), "independent": independent, "files": hashes, "data_ownership": ownership, "complete": True})
-        except Exception:
+            atomic_json(destination / "snapshot.json", {"instance_id": cfg["instance_id"], "created_at": time.time(), "release": self.release(), "independent": independent, "files": hashes, "data_ownership": ownership, "complete": True, "copied_bytes": copied_bytes, "reused_bytes": reused_bytes})
+        except Exception as error:
             self.docker("up", "-d")
+            if isinstance(error, update_storage.SnapshotError):
+                raise HostError(str(error)) from None
             raise
         return destination
 
@@ -1084,28 +1193,50 @@ class Controller:
         atomic_json(self.state / "backup-status.json", result)
         return result
 
-    def update_check(self):
+    def update_check(self, testing_version=None):
         release = self.release()
         repository = release.get("repository", "")
         if not REPOSITORY.fullmatch(repository):
             raise HostError("No verified release repository is configured")
         base = f"https://github.com/{repository}/releases/latest/download"
-        manifest = parse_manifest(read_https(base + "/release-manifest.txt", limit=4096).decode(), repository)
-        return {"current": release["version"], "available": manifest["VERSION"], "update_available": tuple(map(int, manifest["VERSION"].split('.'))) > tuple(map(int, release["version"].split('.'))), "manifest": manifest}
+        if testing_version is not None:
+            if not isinstance(testing_version, str) or not VERSION.fullmatch(testing_version) or '-beta.' not in testing_version:
+                raise HostError("Choose an exact published testing version such as 10.0.0-beta.1")
+            base = f"https://github.com/{repository}/releases/download/v{testing_version}"
+        installed = release.get("version", "")
+        if not VERSION.fullmatch(installed):
+            raise HostError("Installed release version is invalid; review saved release metadata locally")
+        try:
+            manifest = parse_manifest(read_https(base + "/release-manifest.txt", limit=4096).decode(), repository, allow_prerelease=testing_version is not None)
+        except HostError:
+            if '-beta.' not in installed or testing_version is not None:
+                raise
+            return {"current": installed, "available": None, "update_available": False,
+                    "message": "The latest stable release metadata is not compatible with this testing build. No update was applied. Use an explicitly selected beta's published instructions, or check again after the portable stable release is published."}
+        if testing_version is not None and manifest["VERSION"] != testing_version:
+            raise HostError("Testing release manifest does not match the explicitly selected version")
+        def ordering(version):
+            core, _, beta = version.partition('-beta.')
+            return (*map(int, core.split('.')), 0 if beta else 1, int(beta or '0'))
+        available = ordering(manifest["VERSION"]) > ordering(installed)
+        result = {"current": installed, "available": manifest["VERSION"], "update_available": available, "manifest": manifest}
+        if testing_version is None and '-beta.' in installed and not available:
+            result["message"] = "You are using a testing release. No newer stable release is available. Another beta must be explicitly selected using its published testing instructions."
+        return result
 
     def update(self, payload, job):
         cfg = self.config()
         serve_state = self.inspect_private_root(cfg["public_url"])
-        candidate = self.update_check()
+        candidate = self.update_check(payload["testing_version"]) if "testing_version" in payload else self.update_check()
         if not candidate["update_available"]:
-            raise HostError("The latest stable release is already installed")
+            raise HostError("The selected release is not newer than the installed version; downgrades require local recovery review")
         manifest = candidate["manifest"]
         old = self.release()
         next_schema = int(manifest["DATA_SCHEMA_VERSION"])
         minimum = int(manifest["ROLLBACK_MIN_DATA_SCHEMA"])
         if old["data_schema_version"] < minimum or next_schema < old["data_schema_version"]:
             raise HostError("Release requires a separately rehearsed data migration")
-        self.phase(job, "downloading verified stable release")
+        self.phase(job, "downloading explicitly selected testing release" if "testing_version" in payload else "downloading verified stable release")
         stage = self.state / "staging" / job["id"]
         stage.mkdir(parents=True, mode=0o700)
         archive = stage / manifest["ARCHIVE"]
@@ -1129,12 +1260,15 @@ class Controller:
             raise HostError("Release archive version mismatch")
         self.runner(["docker", "pull", manifest["IMAGE"]], timeout=900)
         self.storage_guard()
-        snapshot_path = self.state / "recovery" / job["id"]
+        snapshot_root = self.update_snapshot_storage(create=True)
+        snapshot_path = snapshot_root / job["id"]
         self.snapshot(snapshot_path, job)
         candidate_release = {"version": manifest["VERSION"], "image": manifest["IMAGE"], "repository": old["repository"], "data_schema_version": next_schema, "rollback_min_data_schema": minimum}
-        self.phase(job, "applying release with writes paused")
         activated = None
+        runtime_changed = False
         try:
+            self.phase(job, "applying release with writes paused")
+            runtime_changed = True
             self.write_runtime(cfg, manifest["IMAGE"])
             atomic_json(self.etc / "release.json", candidate_release)
             # Do not reconnect Serve until all services pass readiness. Tailscale
@@ -1147,16 +1281,24 @@ class Controller:
             self.phase(job, "reopening private website")
             self.set_private_root(cfg["public_url"], "http://127.0.0.1:8090", serve_state)
             atomic_json(self.state / "last-update.json", {"snapshot": str(snapshot_path), "previous": old, "current": candidate_release, "reopened_at": time.time(), "rollback_requires_local_review": True})
-            return {"version": manifest["VERSION"], "recovery_snapshot": job["id"], "restart_helper": True}
+            # Cleanup failure cannot roll back a healthy reopened installation.
+            cleanup_warning = None
+            try:
+                update_storage.prune_successful(snapshot_root, cfg["instance_id"], job["id"], self.jobs)
+            except (OSError, ValueError) as error:
+                cleanup_warning = f"Update succeeded; older recovery snapshots need local review: {error}"
+            return {"version": manifest["VERSION"], "recovery_snapshot": job["id"], "restart_helper": True,
+                    **({"warning": cleanup_warning} if cleanup_warning else {})}
         except Exception:
             self.docker("stop")
             if activated:
                 self.rollback_activation(activated)
-            if next_schema == old["data_schema_version"]:
+            if not runtime_changed or next_schema == old["data_schema_version"]:
                 # Same data schema: restart the old image on current data. Never
                 # restore a snapshot over potentially newer data automatically.
-                self.write_runtime(cfg, old["image"])
-                atomic_json(self.etc / "release.json", old)
+                if runtime_changed:
+                    self.write_runtime(cfg, old["image"])
+                    atomic_json(self.etc / "release.json", old)
                 self.docker("up", "-d", "--remove-orphans", "--force-recreate", "--wait", "--wait-timeout", "180")
                 self.set_private_root(cfg["public_url"], "http://127.0.0.1:8090", serve_state)
             raise HostError("Update failed; snapshot retained. Compatible previous image restarted when possible; use local recovery if the website remains unavailable") from None
@@ -1202,72 +1344,8 @@ class Controller:
         self.install_current_units()
 
     def restore(self, snapshot, data_root):
-        """Local-only clean-host recovery; never overwrite an existing install."""
-        if self.config_path.exists():
-            raise HostError("Restore requires a clean installation; existing configuration and newer content were preserved")
-        source = Path(snapshot)
-        if not source.is_absolute() or any(p.is_symlink() for p in [source,*source.parents]) or not source.is_dir():
-            raise HostError("Choose a completed local snapshot directory")
-        if any(p.is_symlink() for p in source.rglob("*")):
-            raise HostError("Snapshot contains a symbolic link")
-        manifest = read_json(source / "snapshot.json", {})
-        if not manifest.get("complete") or not isinstance(manifest.get("files"), dict):
-            raise HostError("Snapshot is incomplete")
-        actual_files = {str(p.relative_to(source)) for p in source.rglob("*") if p.is_file() and p != source / "snapshot.json"}
-        if actual_files != set(manifest["files"]):
-            raise HostError("Snapshot file inventory does not match its manifest")
-        for name, expected in manifest["files"].items():
-            path = Path(name)
-            if path.is_absolute() or ".." in path.parts:
-                raise HostError("Unsafe snapshot path")
-            with (source/path).open("rb") as stream:
-                if hashlib.file_digest(stream, "sha256").hexdigest() != expected:
-                    raise HostError("Snapshot checksum mismatch")
-        for required in ("installation.json", "release.json", "secrets/chat-master.key"):
-            if required not in manifest["files"]:
-                raise HostError("Snapshot is missing recovery configuration or keys")
-        cfg = validate_installation(read_json(source / "installation.json"))
-        if cfg["instance_id"] != manifest.get("instance_id"):
-            raise HostError("Snapshot identity mismatch")
-        target = safe_path(data_root, exists=False)
-        if target.exists() and any(target.iterdir()):
-            raise HostError("Recovery destination must be empty; existing content was preserved")
-        target_info = self.inspect_storage(target.parent)
-        mode = "drive" if target_info["target"] != "/" and target.parent == Path(target_info["target"]) else "folder"
-        cfg["storage"].update(data_root=str(target), mode=mode, backup_root=None)
-        # Use the current node's verified HTTPS name, preserving installation ID.
-        status = json.loads(self.runner(["tailscale", "status", "--json"]))
-        dns = status.get("Self", {}).get("DNSName", "").rstrip(".")
-        if status.get("BackendState") != "Running" or not dns.endswith(".ts.net"):
-            raise HostError("Connect the replacement server to Tailscale before recovery")
-        cfg.update(public_url="https://"+dns, hostname=dns.split(".")[0])
-        cfg = validate_installation(cfg)
-        total = sum(p.stat().st_size for p in (source/"data").rglob("*") if p.is_file())
-        if shutil.disk_usage(target.parent).free < total + 1024**3:
-            raise HostError("Recovery storage needs the complete snapshot size plus 1 GiB reserve")
-        shutil.copytree(source / "data", target, dirs_exist_ok=True)
-        # Metadata is restored only within the new dedicated application tree.
-        for original in [source/"data", *(source/"data").rglob("*")]:
-            restored = target / original.relative_to(source/"data")
-            metadata = manifest.get("data_ownership", {}).get(str(original.relative_to(source/"data")))
-            if not isinstance(metadata, list) or len(metadata) != 3 or metadata[0] not in {0,10001,10002} or metadata[1] not in {0,10001}:
-                raise HostError("Snapshot lacks supported data ownership metadata")
-            os.chown(restored, metadata[0], metadata[1])
-            os.chmod(restored, metadata[2] & 0o777)
-        shutil.copytree(source / "secrets", self.etc / "secrets", dirs_exist_ok=True)
-        for name in ("chat-master.key", "chat-vapid-private.pem"):
-            key = self.etc / "secrets" / name
-            if key.exists():
-                os.chown(key, 0, 10001)
-                os.chmod(key, 0o440)
-        self.provision_storage(cfg)
-        self.save_config(cfg)
-        shutil.copy2(source / "release.json", self.etc / "release.json")
-        info = self.inspect_storage(target)
-        atomic_json(self.state / "storage.json", {"uuid": info["uuid"], "data_root": str(target)})
-        self.write_runtime(cfg, self.release()["image"])
-        atomic_json(self.state / "restored.json", {"snapshot_id": source.name, "instance_id": cfg["instance_id"], "restored_at": time.time(), "application_verified": False})
-        return {"restored": True, "public_url": cfg["public_url"], "next": "Run sudo david-pi repair, then verify actual household content before marking recovery complete. Re-pair devices if the address changed."}
+        """Local-only clean-host recovery from the verified release bootstrap."""
+        return recovery.restore(self, sys.modules[__name__], snapshot, data_root)
 
     def pihole_connect(self, database):
         cfg = self.config()
@@ -1309,8 +1387,10 @@ class Controller:
         self.phase(job, "recreating selected services")
         self.write_runtime(cfg, self.release()["image"])
         self.docker("up", "-d", "--remove-orphans", "--force-recreate", "--wait", "--wait-timeout", "180")
+        # A repaired stack must also start its previously failed oneshot unit.
+        # Its normal `up --wait` rechecks startup without recreating containers.
+        self.runner(["systemctl", "enable", "--now", "david-pi-portal.service"])
         result = self.readiness()
-        self.runner(["systemctl", "enable", "david-pi-portal.service"])
         self.runner(["systemctl", "enable", "--now", "david-pi-status.timer"])
         self.set_private_root(cfg["public_url"], "http://127.0.0.1:8090", serve_state)
         atomic_json(self.state / "installed.json", {"completed_at": time.time(), "instance_id": cfg["instance_id"]})
@@ -1457,13 +1537,14 @@ class SetupHandler(BaseHTTPRequestHandler):
         self.connection.settimeout(20)
 
     def state(self):
-        value = read_json(self.controller.state / "setup.json", {})
+        value = read_json(self.controller.state / "setup.json") or read_json(self.controller.state / "recovery.json", {})
         origin = value.get("origin")
         if self.headers.get("Host") != urllib.parse.urlsplit(origin or "").netloc:
             raise HostError("Invalid private setup address")
         identity = self.headers.get("Tailscale-User-Login", "").casefold()
         if not identity or identity != value.get("admin", "").casefold():
-            raise HostError("Use the Tailscale account chosen in the terminal to open setup")
+            correction = "" if value.get("mode") == "recovery" else ". If the initial login was mistyped, run sudo david-pi renew-claim --admin LOGIN on the server before installation starts"
+            raise HostError("Use the Tailscale account chosen in the terminal to open setup" + correction)
         return value
 
     def session(self, state):
@@ -1477,6 +1558,10 @@ class SetupHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         try:
             state = self.state()
+            if state.get("mode") == "recovery":
+                if self.controller.config_path.exists():
+                    return self.send(503, b"<!doctype html><meta name=viewport content='width=device-width, initial-scale=1'><title>Home maintenance</title><h1>Home maintenance</h1><p>Your saved household is undergoing setup or maintenance. In the server terminal, use <code>sudo david-pi status</code> to follow progress. If setup stopped, use <code>sudo david-pi repair</code>.</p><p>Do not restore an older backup over this installation. The home page returns after service verification.</p>", "text/html; charset=utf-8")
+                return self.send(503, b"<!doctype html><meta name=viewport content='width=device-width, initial-scale=1'><title>Home recovery</title><h1>Home recovery</h1><p>This replacement server is prepared for recovery. Continue in its terminal with <code>sudo david-pi restore</code>, then <code>sudo david-pi repair</code>.</p><p>Your private home page opens after restored services pass verification. Recovery keeps the saved household identity and keys.</p>", "text/html; charset=utf-8")
             # After installation this endpoint is a maintenance page only.
             path = urllib.parse.urlsplit(self.path).path
             if self.controller.config_path.exists() and (self.controller.state / "installed.json").exists() and path == "/":
@@ -1508,6 +1593,8 @@ class SetupHandler(BaseHTTPRequestHandler):
     def setup_post(self):
         try:
             state = self.state()
+            if state.get("mode") == "recovery":
+                raise HostError("Recovery is controlled from the server terminal; a new-home claim is unavailable")
             if self.headers.get("Origin") != state["origin"]:
                 raise HostError("Same-origin setup requests are required")
             if self.headers.get("Content-Type", "").split(";")[0] != "application/json":
@@ -1570,10 +1657,14 @@ def serve(controller):
     web.serve_forever()
 
 
-def print_setup_claim(origin, admin, token, *, renewed=False):
+def print_setup_claim(origin, admin, token, *, renewed=False, previous_admin=None):
     if renewed:
-        print("\nYour setup claim has been renewed. Your saved account, hostname and installation identity are unchanged.\nThe previous code and browser session no longer work. Refresh the wizard and use this new code.\nIf you had not submitted the form, enter those browser choices again.")
-    print(f"\n3. Open your private setup wizard\n   {origin}/\n   Connect this browser's computer or phone to Tailscale using {admin}.\n   The link opens this server's setup wizard; it is different from the Tailscale sign-in link.\n\n4. Claim your home server\n   One-use claim token (valid 15 minutes):\n   {token}\n   Paste the token into the wizard. Keep it private; it never belongs in a URL.\n\nBookmark {origin}/ — this same link opens your home page after setup.\nFind this link again: sudo david-pi address\nIf the claim token expires: sudo david-pi setup\nKeep the server powered on while the wizard shows its installation progress.")
+        if previous_admin is not None and previous_admin != admin:
+            print(f"\nThe intended administrator is now {admin}. They must still sign in to Tailscale with that account and claim this server.\nThe server's Tailscale account, private address and installation identity are unchanged.")
+        else:
+            print("\nYour setup claim has been renewed. Your saved account, hostname and installation identity are unchanged.")
+        print("The previous code and browser session no longer work. Refresh the wizard and use this new code.\nIf you had not submitted the form, enter those browser choices again.")
+    print(f"\n3. Open your private setup wizard\n   {origin}/\n   Connect this browser's computer or phone to Tailscale using {admin}.\n   The link opens this server's setup wizard; it is different from the Tailscale sign-in link.\n\n4. Claim your home server\n   One-use claim token (valid 15 minutes):\n   {token}\n   Paste the token into the wizard. Keep it private; it never belongs in a URL.\n\nBookmark {origin}/ — this same link opens your home page after setup.\nFind this link again: sudo david-pi address\nIf the claim token expires: sudo david-pi setup\nIf the initial login was mistyped (before installation starts):\n   sudo david-pi renew-claim --admin LOGIN\nKeep the server powered on while the wizard shows its installation progress.")
 
 
 def setup_node_account(status):
@@ -1584,7 +1675,12 @@ def setup_node_account(status):
     return login.casefold() if isinstance(login, str) else ""
 
 
-def renew_claim(controller):
+def renew_claim(controller, admin=None):
+    corrected_admin = admin
+    if corrected_admin is not None:
+        if not isinstance(corrected_admin, str) or len(corrected_admin) > 254 or not re.fullmatch(r"[^\s@]+@[^\s@]+", corrected_admin):
+            raise HostError("Enter the intended administrator's exact Tailscale login with sudo david-pi renew-claim --admin LOGIN")
+        corrected_admin = corrected_admin.casefold()
     with controller.external_operation(), controller.setup_claim_lock():
         if controller.config_path.exists() or (controller.state / "installed.json").exists():
             raise HostError("Installation has already begun. Run sudo david-pi setup to resume its saved installation, or sudo david-pi status to review progress")
@@ -1600,6 +1696,9 @@ def renew_claim(controller):
             if not isinstance(expected_account, str) or not expected_account:
                 raise ValueError()
             expected_account = expected_account.casefold()
+            for field in ("node_id", "tailnet"):
+                if field in previous and (not isinstance(previous[field], str) or not previous[field]):
+                    raise ValueError()
             if not isinstance(admin, str) or len(admin) > 254 or not re.fullmatch(r"[^\s@]+@[^\s@]+", admin):
                 raise ValueError()
             if previous["hostname"] != urllib.parse.urlsplit(origin).hostname.split(".")[0]:
@@ -1615,6 +1714,13 @@ def renew_claim(controller):
         status = json.loads(controller.runner(["tailscale", "status", "--json"]))
         if not expected_account or setup_node_account(status) != expected_account:
             raise HostError("The server's connected Tailscale account does not match saved setup. Switch the server back to its original account, then run sudo david-pi setup; no claim was changed")
+        def same_node(current):
+            return (
+                ("node_id" not in previous or current.get("Self", {}).get("ID") == previous["node_id"])
+                and ("tailnet" not in previous or current.get("CurrentTailnet", {}).get("Name") == previous["tailnet"])
+            )
+        if not same_node(status):
+            raise HostError("The server's Tailscale node or network changed. Restore the original connection before renewing setup; no claim was changed")
         serve_state = controller.inspect_private_root(origin)
         # Keep a running helper and its sessions until all connection checks
         # pass. Renewal does not restart it or reinstall prerequisites.
@@ -1625,13 +1731,15 @@ def renew_claim(controller):
         except HostError as error:
             raise HostError(f"{error}. Confirm HTTPS Certificates are enabled at https://console.tailscale.com/admin/dns, then run sudo david-pi setup again; no new claim was issued") from None
         current = json.loads(controller.runner(["tailscale", "status", "--json"]))
-        if setup_node_account(current) != expected_account or controller.private_origin() != origin:
+        if setup_node_account(current) != expected_account or controller.private_origin() != origin or not same_node(current):
             raise HostError("Tailscale changed while renewing setup. Restore the saved account and address, then retry; no new claim was issued")
         token = secrets.token_urlsafe(32)
         renewed = {key: value for key, value in previous.items() if key not in {"token_hash", "expires", "claimed", "session_hash", "session_expires", "csrf"}}
-        renewed.update(token_hash=hashlib.sha256(token.encode()).hexdigest(), expires=time.time()+900, claimed=False)
+        renewed.update(token_hash=hashlib.sha256(token.encode()).hexdigest(), expires=time.time()+900, claimed=False, node_account=expected_account)
+        if corrected_admin is not None:
+            renewed["admin"] = corrected_admin
         atomic_json(controller.state / "setup.json", renewed)
-        print_setup_claim(origin, admin, token, renewed=True)
+        print_setup_claim(origin, renewed["admin"], token, renewed=True, previous_admin=admin)
 
 
 def fresh_setup_private_root(controller, hostname, initial_status):
@@ -1724,6 +1832,10 @@ def initialize(controller, admin, hostname, image, repository):
     setup = {"admin": admin.casefold(), "hostname": actual_hostname, "origin": f"https://{dns}", "instance_id": str(uuid.uuid4()), "timezone": timezone, "expires": 0, "claimed": False}
     if account := setup_node_account(assigned_status):
         setup["node_account"] = account
+    if node_id := assigned_status.get("Self", {}).get("ID"):
+        setup["node_id"] = node_id
+    if tailnet := assigned_status.get("CurrentTailnet", {}).get("Name"):
+        setup["tailnet"] = tailnet
     atomic_json(controller.state / "setup.json", setup)
     atomic_json(controller.state / "tailscale-serve.before.json", serve_state)
     atomic_json(controller.etc / "release.json", {"version": (ROOT / "VERSION").read_text().strip(), "image": image, "repository": repository, "data_schema_version": 1, "rollback_min_data_schema": 1})
@@ -1742,7 +1854,14 @@ def main():
     sub.add_parser("status")
     sub.add_parser("address")
     sub.add_parser("setup-release")
-    sub.add_parser("renew-claim")
+    renew = sub.add_parser("renew-claim")
+    renew.add_argument("--admin")
+    sub.add_parser("recovery-preflight")
+    preparation = sub.add_parser("prepare-recovery")
+    preparation.add_argument("--admin", required=True)
+    preparation.add_argument("--hostname", required=True)
+    snapshots = sub.add_parser("update-snapshots")
+    snapshots.add_argument("--remove")
     sub.add_parser("verify")
     sub.add_parser("pihole-summary")
     pihole = sub.add_parser("pihole-connect")
@@ -1751,8 +1870,8 @@ def main():
     for name in ("admin", "hostname", "image", "repository"):
         init.add_argument("--"+name, required=True)
     restore = sub.add_parser("restore")
-    restore.add_argument("--snapshot", required=True)
-    restore.add_argument("--data-root", required=True)
+    restore.add_argument("--snapshot")
+    restore.add_argument("--data-root")
     recover = sub.add_parser("recover-admin")
     recover.add_argument("login")
     recover.add_argument("--name", default="Household administrator")
@@ -1760,7 +1879,12 @@ def main():
     reconnect.add_argument("--accept-origin", required=True)
     operation = sub.add_parser("operation")
     operation.add_argument("operation", choices=["update", "backup", "restore_test", "update_check", "repair"])
+    operation.add_argument("--version", dest="testing_version")
     args = parser.parse_args()
+    if args.command == "operation" and args.testing_version and args.operation != "update":
+        parser.error("--version is available only for an explicitly selected testing update")
+    if args.command == "restore" and bool(args.snapshot) != bool(args.data_root):
+        parser.error("Supply both --snapshot and --data-root, or omit both for guided choices")
     if os.geteuid() != 0:
         parser.error("Run with sudo on the server")
     if args.command == "address":
@@ -1775,8 +1899,24 @@ def main():
     elif args.command == "initialize":
         with controller.external_operation():
             initialize(controller, args.admin, args.hostname, args.image, args.repository)
+    elif args.command == "recovery-preflight":
+        print(json.dumps(recovery.preflight(controller, sys.modules[__name__]), indent=2))
+    elif args.command == "prepare-recovery":
+        with controller.external_operation():
+            recovery.prepare(controller, sys.modules[__name__], args.admin, args.hostname)
+    elif args.command == "update-snapshots":
+        if args.remove:
+            if not sys.stdin.isatty():
+                raise HostError("Snapshot removal requires an interactive server terminal")
+            expected = "REMOVE SNAPSHOT " + args.remove
+            if input(f"Type {expected} to remove this recovery point: ").strip() != expected:
+                raise HostError("Snapshot removal cancelled")
+            with controller.external_operation():
+                print(json.dumps(controller.remove_update_snapshot(args.remove), indent=2))
+        else:
+            print(json.dumps(controller.update_snapshot_status(), indent=2))
     elif args.command == "renew-claim":
-        renew_claim(controller)
+        renew_claim(controller, admin=args.admin)
     elif args.command == "storage-guard":
         controller.storage_guard()
     elif args.command == "verify":
@@ -1790,7 +1930,14 @@ def main():
             print(json.dumps(controller.pihole_connect(args.database), indent=2))
     elif args.command == "restore":
         with controller.external_operation():
-            print(json.dumps(controller.restore(args.snapshot, args.data_root), indent=2))
+            recovery.preflight(controller, sys.modules[__name__])
+            if args.snapshot:
+                snapshot, data_root = args.snapshot, args.data_root
+            else:
+                if not sys.stdin.isatty():
+                    raise HostError("Guided recovery requires an interactive server terminal")
+                snapshot, data_root = recovery.guided_paths(controller, sys.modules[__name__])
+            print(json.dumps(controller.restore(snapshot, data_root), indent=2))
     elif args.command == "reconnect":
         with controller.external_operation():
             print(json.dumps(controller.reconnect(args.accept_origin), indent=2))
@@ -1808,7 +1955,7 @@ def main():
         else:
             # CLI forwards to the running helper to share its serialization lock.
             from installer.client import request
-            result = request(args.operation)
+            result = request(args.operation, {"testing_version": args.testing_version} if args.testing_version else {})
             print(json.dumps(result, indent=2))
     return 0
 
