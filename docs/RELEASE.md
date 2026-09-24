@@ -37,6 +37,12 @@ Keep the original certificate identity. Pinned Android verifier tools/runtime
 must validate before signing evidence is accepted. If the official toolchain
 changes, review and update its provenance separately; do not bypass verification.
 
+Public Android attestations use schema 2 and contain verified tool hashes and
+versions, without build-machine paths. Regenerate any schema-1 attestation with
+the pinned verifier tools before packaging; release validation rejects the old
+format. Keep full local tool-inspection evidence private. Regenerating metadata
+does not require resigning an unchanged APK.
+
 Provide an immutable official Python 3.13 Alpine 3.22 multiarchitecture digest.
 Build and test both AMD64 and ARM64, produce architecture-specific SBOMs using
 Python distribution metadata (runtime pip is intentionally removed), and verify

@@ -283,6 +283,104 @@ def test_attestation_binds_apk_signer_version_and_complete_source_tree(tmp_path,
     assert document["reproducible_build"] is False
 
 
+def test_public_attestation_omits_private_tool_locations(tmp_path, monkeypatch):
+    root = tmp_path / "home" / "synthetic-builder-name" / "private-build-directory"
+    apk = release_fixture(root, monkeypatch)
+    original_hash = android_release_module.file_sha256(apk)
+    observed = []
+    inspect_apk = android_release_module.inspect_apk
+
+    def capture_inspection(*args, **kwargs):
+        inspection = inspect_apk(*args, **kwargs)
+        observed.append(inspection)
+        return inspection
+
+    monkeypatch.setattr(android_release_module, "inspect_apk", capture_inspection)
+    document = build_attestation(root)
+    private_tools = observed[0]["verification_tools"]
+    assert str(root) in private_tools["aapt"]["path"]
+    assert str(root) in private_tools["apksigner"]["runtime_root_path"]
+    policy = json.loads((root / "config/android-release.json").read_text())
+    assert document["schema_version"] == 2
+    assert document["verification_tools"] == policy["verification_tools"]
+    public_json = json.dumps(document, sort_keys=True)
+    for marker in (str(root), "synthetic-builder-name", "private-build-directory"):
+        assert marker not in public_json
+    assert android_release_module.file_sha256(apk) == original_hash
+    write(root / ATTESTATION_PATH, public_json)
+
+    def unexpected_inspection(*_args, **_kwargs):
+        raise AssertionError("runtime validation must not execute verifier tools")
+
+    monkeypatch.setattr(android_release_module, "inspect_apk", unexpected_inspection)
+    assert verified_android_release(root, require_source=True, require_tools=False) == document
+    assert available_android_release(root, logging.getLogger("public-attestation-test")) == document
+
+
+@pytest.mark.parametrize("schema_version", [1, True, "2"])
+def test_public_attestation_rejects_legacy_and_malformed_schema(
+    tmp_path, monkeypatch, schema_version
+):
+    document = attest(tmp_path, monkeypatch)
+    document["schema_version"] = schema_version
+    write(tmp_path / ATTESTATION_PATH, json.dumps(document))
+    with pytest.raises(AndroidReleaseError, match="schema is unsupported"):
+        verified_android_release(tmp_path, require_source=False, require_tools=False)
+
+
+@pytest.mark.parametrize("schema_version", [1, 2])
+@pytest.mark.parametrize(
+    ("tool", "field"),
+    [
+        ("aapt", "path"),
+        ("aapt", "implementation_path"),
+        ("apksigner", "path"),
+        ("apksigner", "implementation_path"),
+        ("apksigner", "runtime_path"),
+        ("apksigner", "runtime_root_path"),
+        ("aapt", "unverified_claim"),
+    ],
+)
+def test_public_attestation_rejects_host_paths_without_logging_values(
+    tmp_path, monkeypatch, caplog, schema_version, tool, field
+):
+    document = attest(tmp_path, monkeypatch)
+    document["schema_version"] = schema_version
+    marker = "/home/synthetic-builder-name/private-build-directory"
+    document["verification_tools"][tool][field] = marker
+    write(tmp_path / ATTESTATION_PATH, json.dumps(document))
+    with pytest.raises(AndroidReleaseError, match="schema is unsupported|evidence is invalid") as error:
+        verified_android_release(tmp_path, require_source=False, require_tools=False)
+    assert marker not in str(error.value)
+    assert available_android_release(tmp_path, logging.getLogger("private-tool-path-test")) is None
+    assert marker not in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("tool", "field", "replacement"),
+    [
+        ("aapt", "sha256", "0" * 64),
+        ("aapt", "implementation_sha256", "0" * 64),
+        ("aapt", "version", "different version"),
+        ("apksigner", "sha256", "0" * 64),
+        ("apksigner", "implementation_sha256", "0" * 64),
+        ("apksigner", "version", "different version"),
+        ("apksigner", "runtime_sha256", "0" * 64),
+        ("apksigner", "runtime_version", "different runtime version"),
+        ("apksigner", "runtime_file_count", 999),
+        ("apksigner", "runtime_tree_sha256", "0" * 64),
+    ],
+)
+def test_public_tool_identities_remain_bound_to_pinned_policy(
+    tmp_path, monkeypatch, tool, field, replacement
+):
+    document = attest(tmp_path, monkeypatch)
+    document["verification_tools"][tool][field] = replacement
+    write(tmp_path / ATTESTATION_PATH, json.dumps(document))
+    with pytest.raises(AndroidReleaseError, match="differs from the pinned release policy"):
+        verified_android_release(tmp_path, require_source=False, require_tools=False)
+
+
 def test_offline_audiobook_v2_schema_is_additive_and_release_attested():
     schema_root = (
         ROOT
@@ -338,7 +436,8 @@ def test_verifier_identity_is_portable_across_tool_paths(tmp_path, monkeypatch):
 
     verified = verified_android_release(tmp_path, require_source=True, require_tools=True)
     assert verified == document
-    assert verified["verification_tools"]["aapt"]["path"] != str(relocated / "aapt")
+    assert str(relocated) not in json.dumps(verified)
+    assert "path" not in verified["verification_tools"]["aapt"]
 
 
 def test_verifier_rejects_changed_apksigner_implementation_jar(tmp_path, monkeypatch):

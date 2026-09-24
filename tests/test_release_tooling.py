@@ -783,23 +783,19 @@ def _write_promotion_fixture(root, *, raw_high=False):
         tree.update(bytes.fromhex(digest))
         android_files.append({"path": relative, "sha256": digest, "size_bytes": size})
     android_release = {
-        "schema_version": 1,
+        "schema_version": 2,
         "kind": "david-pi-android-release-attestation",
         "provenance_model": "signed_builder_declaration",
         "reproducible_build": False,
         "android_build_tools_version": "35.0.0",
         "verification_tools": {
             "aapt": {
-                "path": "/tools/aapt", "sha256": "4" * 64,
-                "implementation_path": "/tools/lib64/libc++.so",
+                "sha256": "4" * 64,
                 "implementation_sha256": "7" * 64, "version": "fixture",
             },
             "apksigner": {
-                "path": "/tools/apksigner", "sha256": "5" * 64,
-                "implementation_path": "/tools/lib/apksigner.jar",
+                "sha256": "5" * 64,
                 "implementation_sha256": "6" * 64,
-                "runtime_path": "/tools/java",
-                "runtime_root_path": "/tools/jdk",
                 "runtime_sha256": "8" * 64,
                 "runtime_file_count": 3,
                 "runtime_tree_sha256": "9" * 64,

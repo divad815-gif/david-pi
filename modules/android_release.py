@@ -66,6 +66,14 @@ FIREBASE_RESOURCE_NAMES = {
 }
 TOOL_TIMEOUT_SECONDS = 30
 ANDROID_BUILD_TOOLS_VERSION = "35.0.0"
+TOOL_IDENTITY_FIELDS = {
+    "aapt": {"sha256", "version", "implementation_sha256"},
+    "apksigner": {
+        "sha256", "version", "implementation_sha256",
+        "runtime_sha256", "runtime_version", "runtime_file_count",
+        "runtime_tree_sha256",
+    },
+}
 MAX_JAVA_RUNTIME_FILES = 512
 MAX_JAVA_RUNTIME_BYTES = 512 * 1024 * 1024
 SECRET_SCAN_CHUNK_BYTES = 1024 * 1024
@@ -773,15 +781,7 @@ def _assert_tool_bundle_unchanged(bundle: dict[str, Any]) -> None:
 
 
 def _tool_identity(name: str, evidence: dict[str, Any]) -> dict[str, Any]:
-    expected = {
-        "aapt": {"sha256", "version", "implementation_sha256"},
-        "apksigner": {
-            "sha256", "version", "implementation_sha256",
-            "runtime_sha256", "runtime_version", "runtime_file_count",
-            "runtime_tree_sha256",
-        },
-    }[name]
-    return {key: evidence.get(key) for key in sorted(expected)}
+    return {key: evidence.get(key) for key in sorted(TOOL_IDENTITY_FIELDS[name])}
 
 
 def _require_tool_evidence_matches_policy(
@@ -1170,15 +1170,7 @@ def _policy(root: Path) -> tuple[dict[str, Any], dict[str, tuple[str, Path]]]:
         "aapt", "apksigner",
     }:
         raise AndroidReleaseError("Android release verification tool policy is incomplete")
-    expected_keys = {
-        "aapt": {"sha256", "version", "implementation_sha256"},
-        "apksigner": {
-            "sha256", "version", "implementation_sha256",
-            "runtime_sha256", "runtime_version", "runtime_file_count",
-            "runtime_tree_sha256",
-        },
-    }
-    for name, keys in expected_keys.items():
+    for name, keys in TOOL_IDENTITY_FIELDS.items():
         evidence = verification_tools.get(name)
         if not isinstance(evidence, dict) or set(evidence) != keys:
             raise AndroidReleaseError("Android release verification tool policy is invalid")
@@ -1215,6 +1207,7 @@ def _policy(root: Path) -> tuple[dict[str, Any], dict[str, tuple[str, Path]]]:
 
 
 def build_attestation(root: Path) -> dict[str, Any]:
+    """Publish verified identities; host paths stay in private inspection evidence."""
     root = root.resolve()
     policy, paths = _policy(root)
     observed = inspect_apk(
@@ -1242,12 +1235,15 @@ def build_attestation(root: Path) -> dict[str, Any]:
     if observed["signing"]["certificate_sha256"] != policy["release_signer_certificate_sha256"]:
         raise AndroidReleaseError("Android APK signer differs from the established release signer")
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "kind": "david-pi-android-release-attestation",
         "provenance_model": "signed_builder_declaration",
         "reproducible_build": False,
         "android_build_tools_version": policy["android_build_tools_version"],
-        "verification_tools": observed["verification_tools"],
+        "verification_tools": {
+            name: _tool_identity(name, observed["verification_tools"][name])
+            for name in TOOL_IDENTITY_FIELDS
+        },
         "application_id": observed["application_id"],
         "version_code": observed["version_code"],
         "version_name": observed["version_name"],
@@ -1291,7 +1287,7 @@ def verified_android_release(
     )
     if (
         not _plain_int(attestation.get("schema_version"))
-        or attestation.get("schema_version") != 1
+        or attestation.get("schema_version") != 2
         or attestation.get("kind") != "david-pi-android-release-attestation"
         or attestation.get("provenance_model") != "signed_builder_declaration"
         or attestation.get("reproducible_build") is not False
@@ -1326,49 +1322,25 @@ def verified_android_release(
     )
     if set(verification_tools) != {"aapt", "apksigner"}:
         raise AndroidReleaseError("Android release verification tool evidence is incomplete")
-    expected_evidence_keys = {
-        "aapt": {
-            "path", "sha256", "version", "implementation_path",
-            "implementation_sha256",
-        },
-        "apksigner": {
-            "path", "sha256", "version", "implementation_path",
-            "implementation_sha256", "runtime_path", "runtime_sha256",
-            "runtime_version", "runtime_root_path", "runtime_file_count",
-            "runtime_tree_sha256",
-        },
-    }
     for name, evidence in verification_tools.items():
         if (
             not isinstance(evidence, dict)
-            or set(evidence) != expected_evidence_keys[name]
-            or not isinstance(evidence.get("path"), str)
-            or not evidence["path"]
+            or set(evidence) != TOOL_IDENTITY_FIELDS[name]
             or not isinstance(evidence.get("version"), str)
             or not evidence["version"]
             or len(evidence["version"]) > 1024
         ):
             raise AndroidReleaseError("Android release verification tool evidence is invalid")
         _require_sha256(evidence.get("sha256"), f"Android {name} tool hash")
-        if "implementation_path" in expected_evidence_keys[name]:
-            if (
-                not isinstance(evidence.get("implementation_path"), str)
-                or not evidence["implementation_path"]
-            ):
-                raise AndroidReleaseError("Android release verification tool evidence is invalid")
-            _require_sha256(
-                evidence.get("implementation_sha256"),
-                f"Android {name} implementation hash",
-            )
+        _require_sha256(
+            evidence.get("implementation_sha256"),
+            f"Android {name} implementation hash",
+        )
         if name == "apksigner":
             if (
-                not isinstance(evidence.get("runtime_path"), str)
-                or not evidence["runtime_path"]
-                or not isinstance(evidence.get("runtime_version"), str)
+                not isinstance(evidence.get("runtime_version"), str)
                 or not evidence["runtime_version"]
                 or len(evidence["runtime_version"]) > 4096
-                or not isinstance(evidence.get("runtime_root_path"), str)
-                or not evidence["runtime_root_path"]
                 or not _plain_int(evidence.get("runtime_file_count"))
                 or evidence["runtime_file_count"] < 1
             ):
