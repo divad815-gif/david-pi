@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import io
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -18,6 +20,43 @@ import sys
 
 class RegistryReady(Exception):
     """The verified registry phase completed; local release work remains."""
+
+
+# Official pillow_heif 1.6.0 cp313 musllinux x86_64 wheel, SHA-256
+# 52c40715f36fa99fdd825f5207b3c531e49e0b5cc5884ee63a9f9ea8e46e4d05.
+# Its RECORD authenticates this bundled x265 binary, including 24 public
+# upstream NASM build paths. They are unrelated to this publisher's workspace.
+UPSTREAM_RUNNER_LIBRARY = {
+    "path": "usr/local/lib/python3.13/site-packages/pillow_heif.libs/libx265-26a4b0b8.so.216",
+    "size": 23328177,
+    "sha256": "7beda440c943ffe849605adfee63da3dbe692cb038a2cee9a765d0ff33861ddf",
+}
+
+
+def scoped_runner_screen(original, screen_stream):
+    """Retain every marker except the generic runner home in one proven binary."""
+    def screen_tar(archive, markers):
+        runner_home = b"/home/runner/"
+        if runner_home not in markers:
+            return original(archive, markers)
+        count = 0
+        for entry in archive:
+            metadata = " ".join((entry.name, entry.linkname, entry.uname, entry.gname)).encode()
+            screen_stream(io.BytesIO(metadata), markers)
+            if entry.isfile():
+                if entry.name == UPSTREAM_RUNNER_LIBRARY["path"]:
+                    require(entry.size == UPSTREAM_RUNNER_LIBRARY["size"],
+                            "Known upstream library size differs")
+                    payload = archive.extractfile(entry).read(entry.size + 1)
+                    require(len(payload) == entry.size and hashlib.sha256(payload).hexdigest()
+                            == UPSTREAM_RUNNER_LIBRARY["sha256"],
+                            "Known upstream library bytes differ")
+                    screen_stream(io.BytesIO(payload), [m for m in markers if m != runner_home])
+                else:
+                    screen_stream(archive.extractfile(entry), markers)
+                count += 1
+        return count
+    return screen_tar
 
 
 def require(condition, message):
@@ -106,6 +145,7 @@ def run(args):
     sys.path.insert(0, str(source / "scripts"))
     import testing_transfer as transfer
     import testing_release as release
+    import testing_artifacts as artifacts
     require(Path(transfer.__file__).resolve().parent == source / "scripts"
             and Path(release.__file__).resolve().parent == source / "scripts"
             and transfer.ROOT == source and release.ROOT == source,
@@ -119,6 +159,14 @@ def run(args):
                             args.expected_revision, args.release_id)
     transfer.command = adapter
     release.command = adapter
+    # This exception is only for GitHub's generic ephemeral account, never a
+    # local owner's home or the exact candidate/publisher checkout paths.
+    require(os.environ.get("GITHUB_ACTIONS") == "true"
+            and Path.home() == Path("/home/runner")
+            and source == Path(os.environ.get("GITHUB_WORKSPACE", "")) / "candidate-source"
+            and publisher == source.parent / "publisher",
+            "Registry publisher requires its reviewed GitHub workspace layout")
+    artifacts.screen_tar = scoped_runner_screen(artifacts.screen_tar, artifacts.screen_stream)
     release.public_assets = lambda a, r, e, d: registry_boundary(a, r, e, d, args, release.write)
     args.output = args.output.resolve()
     args.private_markers = None

@@ -6,12 +6,65 @@ from unittest import TestCase
 from unittest.mock import Mock
 import hashlib
 import tempfile
+import io
+import sys
+import tarfile
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location("registry_driver", ROOT / "scripts/promote_staged_beta_registry.py")
 driver = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(driver)
+sys.path.insert(0, str(ROOT / "scripts"))
+import testing_artifacts as artifacts
+
+
+class ScopedRunnerPrivacyTest(TestCase):
+    def archive(self, name, payload, uname=""):
+        buffer = io.BytesIO()
+        with tarfile.open(fileobj=buffer, mode="w") as tar:
+            entry = tarfile.TarInfo(name)
+            entry.size = len(payload)
+            entry.uname = uname
+            tar.addfile(entry, io.BytesIO(payload))
+        buffer.seek(0)
+        tar = tarfile.open(fileobj=buffer)
+        self.addCleanup(tar.close)
+        return tar
+
+    def setUp(self):
+        self.payload = b"upstream /home/runner/work/pillow_heif/source.asm\0"
+        self.name = "usr/lib/proven-upstream.so"
+        self.proof = {"path": self.name, "size": len(self.payload),
+                      "sha256": hashlib.sha256(self.payload).hexdigest()}
+        self.scan = driver.scoped_runner_screen(artifacts.screen_tar, artifacts.screen_stream)
+
+    def test_only_exact_upstream_bytes_allow_generic_runner_prefix(self):
+        with patch.object(driver, "UPSTREAM_RUNNER_LIBRARY", self.proof):
+            self.assertEqual(self.scan(self.archive(self.name, self.payload),
+                                       [b"/home/runner/", b"/home/runner/work/product/"]), 1)
+            with self.assertRaises(ValueError):
+                self.scan(self.archive("usr/lib/unrelated.so", self.payload), [b"/home/runner/"])
+            with self.assertRaises(ValueError):
+                self.scan(self.archive(self.name, self.payload.replace(b"source", b"secret")),
+                          [b"/home/runner/"])
+
+    def test_metadata_and_all_other_private_markers_are_retained(self):
+        with patch.object(driver, "UPSTREAM_RUNNER_LIBRARY", self.proof):
+            with self.assertRaises(ValueError):
+                self.scan(self.archive(self.name, self.payload, uname="/home/runner/owner"),
+                          [b"/home/runner/"])
+            with self.assertRaises(ValueError):
+                self.scan(self.archive(self.name, self.payload),
+                          [b"/home/runner/", b"/home/runner/work/pillow_heif/"])
+
+    def test_local_owner_scan_delegates_without_any_exception(self):
+        original = Mock(return_value=7)
+        scan = driver.scoped_runner_screen(original, artifacts.screen_stream)
+        archive = self.archive(self.name, self.payload)
+        self.assertEqual(scan(archive, [b"/home/example-owner/"]), 7)
+        original.assert_called_once_with(archive, [b"/home/example-owner/"])
 
 
 class DraftLookupTest(TestCase):
