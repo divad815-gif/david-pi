@@ -13,16 +13,23 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
           cache: pip
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
       - run: sudo apt-get update && sudo apt-get install -y ffmpeg poppler-utils shellcheck rsync
       - run: pip install -r requirements.txt pytest
       - run: python scripts/check-public-release.py
+      - run: python scripts/check_tracked_secrets.py
       - run: shellcheck -e SC1091,SC2034 david-pi install.sh installer/lib/*.sh scripts/*.sh deploy/*.sh
       - run: bash -n david-pi install.sh installer/lib/*.sh scripts/*.sh deploy/*.sh
-      - run: pytest -q tests installer/tests
+      - run: python -m pytest -q tests installer/tests
+      - run: node --test tests/*.test.mjs
       - run: docker compose config >/dev/null
       - run: docker compose -f compose.yaml -f compose.dev.yaml config >/dev/null
       - run: docker build -t david-pi:ci .
@@ -32,11 +39,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
       - uses: android-actions/setup-android@v3
+        with:
+          # Command-line tools are set up separately by the action; the old
+          # SDK package named "tools" is no longer available.
+          packages: platform-tools platforms;android-35 build-tools;35.0.0
       - working-directory: clients/android
         run: ./gradlew testDebugUnitTest assembleDebug --no-daemon
 
@@ -44,9 +57,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
       - uses: docker/build-push-action@v6
+        env:
+          DOCKER_BUILD_RECORD_UPLOAD: "false"
         with:
           context: .
           platforms: linux/amd64,linux/arm64

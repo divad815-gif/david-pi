@@ -1,0 +1,7 @@
+[Unit]
+Description=Refresh household server health each minute
+[Timer]
+OnBootSec=15s
+OnUnitActiveSec=1min
+[Install]
+WantedBy=timers.target

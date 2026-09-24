@@ -15,6 +15,9 @@ david-pi text eol=lf
 Dockerfile text eol=lf
 
 *.bat text eol=crlf
+# Keep the Android build input byte-identical in checkouts and source archives
+# so its signed exact-source attestation remains reproducible on Linux.
+clients/android/gradlew.bat text eol=lf
 *.jar binary
 *.mp3 binary
 *.wasm binary

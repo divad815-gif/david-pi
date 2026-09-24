@@ -1,31 +1,47 @@
+{%- set davidpi_theme = 'dark' if request is defined and request.cookies.get('davidPiThemeV1') == 'dark' else 'light' -%}
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="{{ davidpi_theme }}">
 <head>
-  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="csrf-token" content="{{ csrf_token }}"><meta name="theme-color" content="#fffaf2">
-  <title>Movie Night · David-Pi</title>
-  <link rel="stylesheet" href="/static/app.css?v=15"><link rel="stylesheet" href="/static/platform.css?v=16">
+  <meta name="server-name" content="{{ server_name }}">
+  <script type="application/json" id="installation-config">{{ public_installation|tojson }}</script>
+  <script src="/static/installation.js?v=2"></script>
+  <meta name="audiobook-progress-scope" content="{{ audiobook_progress_scope }}">
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=auto">
+  <meta name="csrf-token" content="{{ csrf_token }}">
+  <meta name="theme-color" content="#fffaf2">
+  <meta name="color-scheme" content="{{ davidpi_theme }}">
+  <script src="/static/theme-bootstrap.js?v=8"></script>
+  <title>Movie Night · {{ server_name }}</title>
+  <link rel="stylesheet" href="/static/app.css?v=40"><link rel="stylesheet" href="/static/platform.css?v=26"><link rel="stylesheet" href="/static/david-pi-ui.css?v=16">
 </head>
 <body class="module-page">
-  <header class="module-bar"><a class="back" href="/" aria-label="Back home">&larr;</a><div><p>David-Pi</p><h1>Movie Night</h1></div></header>
+  <header class="module-bar"><a class="back" href="/" aria-label="Back home">&larr;</a><div><p>{{ server_name }}</p><h1>Movie Night</h1></div></header>
   <main class="module-shell movie-shell">
-    <nav class="media-type-tabs" id="mediaTypeTabs" aria-label="Watchlist type"><button class="selected" data-type="movie">Movies</button><button data-type="tv">TV Shows</button></nav>
-    <section class="module-intro"><div><p class="sheet-kicker">Our watchlist</p><h2>What sounds good?</h2><p id="availabilitySummary">See what’s ready on your services.</p></div><button class="round-primary" id="openMovieSearch">+ Add</button></section>
-    {% if provider_mode == 'manual' %}<div class="module-notice">Movie Night works in manual mode now. Connect a free TMDB credential later for search, posters, and streaming availability.</div>{% endif %}
-    <div class="movie-actions"><button id="pickMovie">Pick one for us</button><button id="checkMovies">Check availability</button><button id="openSubscriptions">Our services</button></div>
-    <label class="module-search"><span aria-hidden="true">⌕</span><input id="watchlistSearch" type="search" placeholder="Search our watchlist"></label>
-    <nav class="chip-nav" id="movieViews"><button class="selected" data-view="all">Watchlist</button><button data-view="available">Available now</button><button data-view="watched">Watched</button><button data-view="david">Added by David</button><button data-view="diana">Added by Diana</button></nav>
-    <section class="movie-grid" id="movieGrid" aria-live="polite"></section>
-    <section class="module-empty" id="moviesEmpty" hidden><span aria-hidden="true">▶</span><h2>Your watchlist is ready.</h2><p>Add a movie you both want to see.</p><button class="big-button" id="emptyAddMovie">Add a movie</button></section>
+    <nav class="media-type-tabs" id="mediaTypeTabs" aria-label="Watchlist type"><button type="button" class="selected" data-type="movie" aria-pressed="true">Movies</button><button type="button" data-type="tv" aria-pressed="false">TV Shows</button></nav>
+    <section class="module-intro"><div><p class="sheet-kicker">Our watchlist</p><h2>What sounds good?</h2><p id="availabilitySummary">See what’s ready on your services.</p></div><button type="button" class="round-primary" id="openMovieSearch">+ Add</button></section>
+    {% if provider_mode == 'manual' %}<div class="module-notice">Movie Night works in manual mode now. Connect your own TMDB credential later for search, posters, and country-specific streaming availability.</div>{% endif %}
+    <div class="movie-actions"><button type="button" id="pickMovie">Pick one for us</button><button type="button" {% if provider_mode == "manual" %}hidden disabled{% endif %} id="checkMovies">Check availability</button><button type="button" {% if provider_mode == "manual" %}hidden disabled{% endif %} id="openSubscriptions">My services</button></div>
+    <label class="module-search"><span aria-hidden="true">⌕</span><input id="watchlistSearch" type="search" aria-label="Search our watchlist" placeholder="Search our watchlist"></label>
+    <nav class="chip-nav" id="movieViews" aria-label="Watchlist views"><button type="button" class="selected" data-view="all" aria-pressed="true">Watchlist</button><button type="button" data-view="available" aria-pressed="false">Available now</button><button type="button" data-view="watched" aria-pressed="false">Watched</button><button type="button" data-view="mine" aria-pressed="false">Added by me</button>{% for member in household_members %}<button type="button" data-view="owner:{{ member.login }}" aria-pressed="false">Added by {{ member.name }}</button>{% endfor %}<button type="button" data-view="trash" aria-pressed="false">Trash</button></nav>
+    <section id="moviesPanel" aria-busy="false">
+      <p class="module-result-count" id="movieResultCount" hidden></p>
+      <section class="module-state" id="moviesLoading" aria-label="Loading watchlist"><span class="module-spinner" aria-hidden="true"></span><p>Loading watchlist…</p></section>
+      <section class="movie-grid" id="movieGrid" hidden></section>
+      <button class="load-more" type="button" id="moviesMore" hidden>Load more</button>
+      <section class="module-empty" id="moviesEmpty" hidden><span aria-hidden="true">▶</span><h2>Your watchlist is ready.</h2><p>Add a movie you both want to see.</p><button class="big-button" type="button" id="emptyAddMovie">Add a movie</button></section>
+      <section class="module-empty compact-state" id="moviesNoResults" hidden><span aria-hidden="true">⌕</span><h2>No matches here.</h2><p>Try another search or choose a different view.</p></section>
+      <section class="module-empty compact-state" id="moviesError" hidden><span aria-hidden="true">!</span><h2>Watchlist didn’t load.</h2><p id="moviesErrorText">Check the connection and try again.</p><button class="big-button" type="button" id="moviesRetry">Try again</button></section>
+    </section>
   </main>
-  <dialog class="small-sheet movie-search-sheet" id="movieSearchSheet"><button class="close" id="closeMovieSearch" aria-label="Close search">&times;</button><p class="sheet-kicker">Find something</p><h2>Add a movie</h2><p class="sheet-copy" id="movieSearchHelp">Search TMDB, then tap Add beside the title you want.</p><label class="module-search"><span>⌕</span><input id="movieSearchInput" type="search" placeholder="Movie title" autocomplete="off" enterkeyhint="search"></label><p class="movie-search-message" id="movieSearchMessage" role="status" aria-live="polite"></p><div id="movieSearchResults" class="movie-search-results"></div><button class="secondary-button" id="manualMovieButton">Enter manually</button></dialog>
-  <dialog class="small-sheet" id="manualMovieSheet"><button class="close" id="closeManualMovie">&times;</button><p class="sheet-kicker">Watchlist</p><h2>Movie details</h2><label class="text-field">Title<input id="manualMovieTitle" maxlength="200"></label><label class="text-field">Release year<input id="manualMovieYear" inputmode="numeric" maxlength="4"></label><label class="text-field">Short description<textarea id="manualMovieOverview" maxlength="3000"></textarea></label><button class="big-button" id="saveManualMovie">Add to watchlist</button><p class="upload-message" id="manualMovieMessage"></p></dialog>
-  <dialog class="small-sheet" id="subscriptionsSheet"><button class="close" id="closeSubscriptions">&times;</button><p class="sheet-kicker">Streaming</p><h2>Our services</h2><p class="sheet-copy">Choose only subscriptions you currently have.</p><div class="subscription-list" id="subscriptionList"></div><button class="big-button" id="saveSubscriptions">Save services</button></dialog>
-  <dialog class="small-sheet movie-pick-sheet" id="moviePickSheet"><button class="close" id="closeMoviePick">&times;</button><p class="sheet-kicker">Tonight’s pick</p><div id="moviePick"></div></dialog>
-  <dialog class="confirm-sheet" id="movieConfirm"><h2>Remove this movie?</h2><p>It will leave your shared watchlist.</p><div class="confirm-actions"><button id="cancelMovieConfirm">Cancel</button><button class="danger-button" id="acceptMovieConfirm">Remove</button></div></dialog>
+  <dialog class="small-sheet movie-search-sheet" id="movieSearchSheet" aria-label="Add a movie or TV show"><button type="button" class="close" id="closeMovieSearch" aria-label="Close search">&times;</button><p class="sheet-kicker">Find something</p><h2>Add a movie</h2><p class="sheet-copy" id="movieSearchHelp">Search TMDB, then tap Add beside the title you want.</p><label class="text-field">Who can see this?<select id="movieVisibility"><option value="shared">Household</option><option value="private">Only me</option></select></label><label class="module-search"><span aria-hidden="true">⌕</span><input id="movieSearchInput" type="search" placeholder="Movie title" autocomplete="off" enterkeyhint="search" aria-label="Search for a movie or TV show"></label><p class="movie-search-message" id="movieSearchMessage" role="status" aria-live="polite"></p><div id="movieSearchResults" class="movie-search-results"></div><button type="button" class="secondary-button" id="manualMovieButton">Enter manually</button></dialog>
+  <dialog class="small-sheet" id="manualMovieSheet" aria-label="Movie or TV show details"><button type="button" class="close" id="closeManualMovie" aria-label="Close details">&times;</button><p class="sheet-kicker">Watchlist</p><h2>Movie details</h2><label class="text-field">Title<input id="manualMovieTitle" maxlength="200"></label><label class="text-field">Release year<input id="manualMovieYear" inputmode="numeric" maxlength="4"></label><label class="text-field">Short description<textarea id="manualMovieOverview" maxlength="3000"></textarea></label><button type="button" class="big-button" id="saveManualMovie">Add to watchlist</button><p class="upload-message" id="manualMovieMessage" role="status" aria-live="polite"></p></dialog>
+  <dialog class="small-sheet" id="subscriptionsSheet" aria-label="Streaming services"><button type="button" class="close" id="closeSubscriptions" aria-label="Close streaming services">&times;</button><p class="sheet-kicker">Streaming</p><h2>My services</h2><p class="sheet-copy">These choices are personal to your account.</p><div class="subscription-list" id="subscriptionList"></div><button type="button" class="big-button" id="saveSubscriptions">Save services</button></dialog>
+  <dialog class="small-sheet movie-pick-sheet" id="moviePickSheet" aria-label="Tonight's pick"><button type="button" class="close" id="closeMoviePick" aria-label="Close tonight's pick">&times;</button><p class="sheet-kicker">Tonight’s pick</p><div id="moviePick"></div></dialog>
+  <dialog class="confirm-sheet" id="movieConfirm" aria-label="Move title to trash"><h2>Move this movie to trash?</h2><p>It leaves the active watchlist but remains recoverable for at least 30 days.</p><div class="confirm-actions"><button type="button" id="cancelMovieConfirm">Cancel</button><button type="button" class="danger-button" id="acceptMovieConfirm">Move to trash</button></div></dialog>
   <div class="toast" id="platformToast" hidden role="status"></div>
-  <footer class="provider-credit">Streaming availability is supplied by JustWatch through TMDB when connected.</footer>
-  <script src="/static/mobile-dialog-host.js?v=7" defer></script>
-  <script src="/static/movies.js?v=6" defer></script>
+  <footer class="provider-credit" aria-label="Data credits"><p><strong>Data credits</strong></p><p><a href="https://www.themoviedb.org" rel="noreferrer"><img src="/static/brands/tmdb.svg" width="128" alt="TMDB"></a></p><p>Streaming availability is supplied by <a href="https://www.justwatch.com" rel="noreferrer">JustWatch</a> through TMDB when connected. Availability depends on country and may change. This product uses the TMDB API but is not endorsed or certified by TMDB.</p></footer>
+  <script src="/static/david-pi-ui.js?v=15" defer></script>
+  <script src="/static/mobile-dialog-host.js?v=10" defer></script>
+  <script src="/static/movies.js?v=11" defer></script>
 </body>
 </html>

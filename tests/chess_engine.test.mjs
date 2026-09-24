@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
-import '../static/chess-engine.js';
-
-const E = globalThis.ChessEngine;
+const importedEngine = await import('../static/chess-engine.js');
+const E = importedEngine.default || globalThis.ChessEngine;
 const emptyBoard = () => Array(64).fill(null);
 const bareState = (board, turn = 'white') => ({
   board,

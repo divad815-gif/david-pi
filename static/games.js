@@ -13,9 +13,15 @@ function showToast(message) {
 }
 
 function openGame(name) {
-  document.querySelector('[data-open-scores]').classList.remove('selected');
+  const scoreButton = document.querySelector('[data-open-scores]');
+  scoreButton.classList.remove('selected');
+  scoreButton.setAttribute('aria-pressed', 'false');
   if (scoresPanel) scoresPanel.hidden = true;
-  gameButtons.forEach((button) => button.classList.toggle('selected', button.dataset.game === name));
+  gameButtons.forEach((button) => {
+    const selected = button.dataset.game === name;
+    button.classList.toggle('selected', selected);
+    button.setAttribute('aria-pressed', selected ? 'true' : 'false');
+  });
   gamePanels.forEach((panel) => { panel.hidden = panel.dataset.panel !== name; });
   localStorage.setItem('david-pi-game', name);
 }
@@ -110,8 +116,10 @@ async function loadHighScores() {
 }
 
 function openScores() {
-  gameButtons.forEach((button) => button.classList.remove('selected'));
-  document.querySelector('[data-open-scores]').classList.add('selected');
+  gameButtons.forEach((button) => { button.classList.remove('selected'); button.setAttribute('aria-pressed', 'false'); });
+  const scoreButton = document.querySelector('[data-open-scores]');
+  scoreButton.classList.add('selected');
+  scoreButton.setAttribute('aria-pressed', 'true');
   gamePanels.forEach((panel) => { panel.hidden = true; });
   scoresPanel.hidden = false;
   loadHighScores();
@@ -119,9 +127,37 @@ function openScores() {
 document.querySelector('[data-open-scores]').addEventListener('click', openScores);
 document.querySelectorAll('[data-score-scope]').forEach((button) => button.addEventListener('click', () => {
   scoreScope = button.dataset.scoreScope;
-  document.querySelectorAll('[data-score-scope]').forEach((item) => item.classList.toggle('selected', item === button));
+  document.querySelectorAll('[data-score-scope]').forEach((item) => {
+    const selected = item === button;
+    item.classList.toggle('selected', selected);
+    item.setAttribute('aria-pressed', selected ? 'true' : 'false');
+  });
   renderHighScores();
 }));
+
+function moveGridFocus(event, board, columns) {
+  if (!['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return null;
+  const cells = [...board.querySelectorAll('[role="gridcell"]')];
+  const current = Math.max(0, cells.indexOf(event.target.closest?.('[role="gridcell"]')));
+  const rowStart = Math.floor(current / columns) * columns;
+  let next = current;
+  if (event.key === 'ArrowLeft') next = Math.max(rowStart, current - 1);
+  if (event.key === 'ArrowRight') next = Math.min(rowStart + columns - 1, current + 1);
+  if (event.key === 'ArrowUp') next = Math.max(0, current - columns);
+  if (event.key === 'ArrowDown') next = Math.min(cells.length - 1, current + columns);
+  if (event.key === 'Home') next = rowStart;
+  if (event.key === 'End') next = Math.min(cells.length - 1, rowStart + columns - 1);
+  event.preventDefault();
+  cells.forEach((cell, index) => { cell.tabIndex = index === next ? 0 : -1; });
+  cells[next]?.focus({preventScroll:true});
+  return cells[next] ? Number(cells[next].dataset.index) : null;
+}
+
+function restoreGridFocus(board, index, shouldFocus) {
+  if (!shouldFocus) return;
+  const cell = board.querySelector(`[data-index="${index}"]`);
+  if (cell) requestAnimationFrame(() => cell.focus({preventScroll:true}));
+}
 
 // Sudoku
 const baseSolution = '534678912672195348198342567859761423426853791713924856961537284287419635345286179';
@@ -155,7 +191,8 @@ function newSudoku() {
   renderSudoku();
 }
 
-function renderSudoku() {
+function renderSudoku(forceFocus = false) {
+  const hadFocus = forceFocus || sudokuBoard.contains(document.activeElement);
   const selectedRow = Math.floor(sudoku.selected / 9);
   const selectedColumn = sudoku.selected % 9;
   const selectedValue = sudoku.values[sudoku.selected];
@@ -166,15 +203,20 @@ function renderSudoku() {
     cell.className = 'sudoku-cell';
     cell.dataset.index = index;
     cell.setAttribute('role', 'gridcell');
+    cell.setAttribute('aria-rowindex', String(Math.floor(index / 9) + 1));
+    cell.setAttribute('aria-colindex', String((index % 9) + 1));
     cell.setAttribute('aria-label', `Row ${Math.floor(index / 9) + 1}, column ${(index % 9) + 1}${value ? `, ${value}` : ', empty'}`);
+    cell.tabIndex = index === sudoku.selected ? 0 : -1;
     cell.textContent = value;
     if (sudoku.puzzle[index]) cell.classList.add('fixed');
     if (Math.floor(index / 9) === selectedRow || index % 9 === selectedColumn) cell.classList.add('related');
     if (selectedValue && value === selectedValue) cell.classList.add('same');
-    if (index === sudoku.selected) cell.classList.add('selected');
-    if (sudoku.wrong.has(index)) cell.classList.add('wrong');
+    if (index === sudoku.selected) { cell.classList.add('selected'); cell.setAttribute('aria-selected', 'true'); }
+    else cell.setAttribute('aria-selected', 'false');
+    if (sudoku.wrong.has(index)) { cell.classList.add('wrong'); cell.setAttribute('aria-invalid', 'true'); }
     sudokuBoard.append(cell);
   });
+  restoreGridFocus(sudokuBoard, sudoku.selected, hadFocus);
 }
 
 function enterSudoku(value) {
@@ -194,7 +236,13 @@ sudokuBoard.addEventListener('click', (event) => {
   const cell = event.target.closest('.sudoku-cell');
   if (!cell) return;
   sudoku.selected = Number(cell.dataset.index);
-  renderSudoku();
+  renderSudoku(true);
+});
+sudokuBoard.addEventListener('keydown', (event) => {
+  const index = moveGridFocus(event, sudokuBoard, 9);
+  if (index === null) return;
+  sudoku.selected = index;
+  renderSudoku(true);
 });
 for (let number = 1; number <= 9; number += 1) {
   const button = document.createElement('button');
@@ -211,7 +259,7 @@ document.querySelector('#checkSudoku').addEventListener('click', () => {
   sudoku.values.forEach((value, index) => {
     if (value && value !== sudoku.solution[index]) sudoku.wrong.add(index);
   });
-  if (sudoku.wrong.size) sudokuMessage.textContent = `${sudoku.wrong.size} square${sudoku.wrong.size === 1 ? '' : 's'} need another look.`;
+  if (sudoku.wrong.size) sudokuMessage.textContent = `${sudoku.wrong.size} square${sudoku.wrong.size === 1 ? ' needs' : 's need'} another look.`;
   else if (sudoku.values.some((value) => !value)) sudokuMessage.textContent = 'Everything entered so far looks good.';
   else {
     sudokuMessage.textContent = 'Perfect — puzzle complete!';
@@ -454,7 +502,7 @@ function renderMemory() {
   document.querySelector('#memoryBoard').innerHTML = memory.cards.map((card, index) => `
     <button type="button" class="memory-card ${card.revealed ? 'revealed' : ''} ${card.matched ? 'matched' : ''}"
       data-index="${index}" aria-label="${card.revealed || card.matched ? card.symbol : 'Hidden card'}"
-      ${card.matched ? 'disabled' : ''}>${card.symbol}</button>`).join('');
+      ${card.matched ? 'disabled' : ''}><span aria-hidden="true">${card.symbol}</span></button>`).join('');
 }
 document.querySelector('#memoryBoard').addEventListener('click', (event) => {
   const button = event.target.closest('.memory-card');
@@ -502,6 +550,7 @@ const chessMessage = document.querySelector('#chessMessage');
 let chess;
 let chessUndo = [];
 let chessAiThinking = false;
+let chessFocus = 0;
 let chessRating = {rating:1000, games_played:0, wins:0, draws:0, losses:0, opponents:{easy:800, medium:1000, hard:1200}};
 const chessAt = ChessEngine.at;
 const chessInside = ChessEngine.inside;
@@ -702,7 +751,7 @@ function chooseChessAiMove() {
 function maybeChessAi() {
   if (document.querySelector('#chessMode').value !== 'solo' || chess.turn !== chess.aiColor || chess.over || chessAiThinking) return;
   chessAiThinking = true;
-  chessMessage.textContent = `David-Pi (${formatDifficulty(chess.aiColor)}) is thinking…`;
+  chessMessage.textContent = `${window.davidPiServerName || "Home server"} (${formatDifficulty(chess.aiColor)}) is thinking…`;
   setTimeout(() => {
     const move = chooseChessAiMove();
     chessAiThinking = false;
@@ -710,7 +759,11 @@ function maybeChessAi() {
   }, 360);
 }
 
-function renderChess() {
+function renderChess(forceFocus = false) {
+  const focusedSquare = chessBoardElement.contains(document.activeElement)
+    ? Number(document.activeElement.closest('[data-index]')?.dataset.index) : null;
+  if (focusedSquare !== null && Number.isInteger(focusedSquare)) chessFocus = focusedSquare;
+  const hadFocus = forceFocus || focusedSquare !== null;
   const indices = Array.from({length:64}, (_, index) => index);
   if (document.querySelector('#chessMode').value === 'solo' && chess.playerColor === 'black') indices.reverse();
   chessBoardElement.innerHTML = indices.map((index) => {
@@ -721,16 +774,19 @@ function renderChess() {
     if (index === chess.selected) classes.push('selected');
     if (legal) classes.push(piece ? 'capture' : 'legal');
     if (chess.lastMove?.includes(index)) classes.push('last-move');
-    const label = piece ? `${piece.color} ${piece.type}` : `Empty square ${String.fromCharCode(97 + index % 8)}${8 - row}`;
-    return `<button type="button" class="${classes.join(' ')}" data-index="${index}" role="gridcell" aria-label="${label}">
+    const state = index === chess.selected ? ', selected' : legal ? (piece ? ', available capture' : ', available move') : '';
+    const label = piece ? `${piece.color} ${piece.type}${state}` : `Empty square ${String.fromCharCode(97 + index % 8)}${8 - row}${state}`;
+    return `<button type="button" class="${classes.join(' ')}" data-index="${index}" role="gridcell" aria-rowindex="${row + 1}" aria-colindex="${index % 8 + 1}" aria-selected="${index === chess.selected}" tabindex="${index === chessFocus ? '0' : '-1'}" aria-label="${label}">
       ${piece ? `<span class="chess-piece ${piece.color}">${chessGlyphs[piece.color][piece.type]}</span>` : ''}</button>`;
   }).join('');
   document.querySelector('#undoChess').disabled = !chessUndo.length;
   document.querySelector('#chessMoves').textContent = chess.moves;
+  restoreGridFocus(chessBoardElement, chessFocus, hadFocus);
 }
 
 function moveChess(from, to) {
   chessUndo.push(JSON.stringify(chess));
+  chessFocus = to;
   const movedColor = chess.turn;
   const next = ChessEngine.applyMove(chess, {from, to});
   chess = {...next, selected:null, legal:[], lastMove:[from, to], over:false, moves:chess.moves + 1};
@@ -752,7 +808,7 @@ function moveChess(from, to) {
       : next.special === 'en-passant' ? `${formatDifficulty(movedColor)} captured en passant. ` : '';
     chessMessage.textContent = `${special}${name} to move${inCheck ? ' — check!' : '.'}`;
   }
-  renderChess();
+  renderChess(true);
   maybeChessAi();
 }
 
@@ -761,6 +817,7 @@ chessBoardElement.addEventListener('click', (event) => {
   const square = event.target.closest('.strategy-square');
   if (!square) return;
   const index = Number(square.dataset.index);
+  chessFocus = index;
   const piece = chess.board[index];
   if (chess.selected !== null && chess.legal.includes(index)) {
     moveChess(chess.selected, index);
@@ -773,7 +830,11 @@ chessBoardElement.addEventListener('click', (event) => {
     chess.selected = null;
     chess.legal = [];
   }
-  renderChess();
+  renderChess(true);
+});
+chessBoardElement.addEventListener('keydown', (event) => {
+  const index = moveGridFocus(event, chessBoardElement, 8);
+  if (index !== null) chessFocus = index;
 });
 document.querySelector('#newChess').addEventListener('click', newChess);
 document.querySelector('#chessMode').addEventListener('change', newChess);
@@ -799,6 +860,7 @@ const checkersMessage = document.querySelector('#checkersMessage');
 let checkers;
 let checkersUndo = [];
 let checkersAiThinking = false;
+let checkersFocus = 0;
 const otherCheckersColor = (color) => color === 'coral' ? 'dark' : 'coral';
 const checkerDirections = (piece) => piece.king ? [-1, 1] : [piece.color === 'coral' ? -1 : 1];
 
@@ -857,7 +919,11 @@ function newCheckers() {
   renderCheckers();
 }
 
-function renderCheckers() {
+function renderCheckers(forceFocus = false) {
+  const focusedSquare = checkersBoardElement.contains(document.activeElement)
+    ? Number(document.activeElement.closest('[data-index]')?.dataset.index) : null;
+  if (focusedSquare !== null && Number.isInteger(focusedSquare)) checkersFocus = focusedSquare;
+  const hadFocus = forceFocus || focusedSquare !== null;
   checkersBoardElement.innerHTML = checkers.board.map((piece, index) => {
     const row = Math.floor(index / 8);
     const legal = checkers.legal.some((move) => move.to === index);
@@ -865,13 +931,15 @@ function renderCheckers() {
     if (index === checkers.selected) classes.push('selected');
     if (legal) classes.push(piece ? 'capture' : 'legal');
     if (checkers.lastMove?.includes(index)) classes.push('last-move');
-    return `<button type="button" class="${classes.join(' ')}" data-index="${index}" role="gridcell" aria-label="${
-      piece ? `${piece.color} ${piece.king ? 'king' : 'checker'}` : 'Empty square'}">${
+    const state = index === checkers.selected ? ', selected' : legal ? (piece ? ', available capture' : ', available move') : '';
+    return `<button type="button" class="${classes.join(' ')}" data-index="${index}" role="gridcell" aria-rowindex="${row + 1}" aria-colindex="${index % 8 + 1}" aria-selected="${index === checkers.selected}" tabindex="${index === checkersFocus ? '0' : '-1'}" aria-label="${
+      piece ? `${piece.color} ${piece.king ? 'king' : 'checker'}${state}` : `Empty square${state}`}">${
       piece ? `<span class="checkers-piece ${piece.color === 'dark' ? 'dark-piece' : ''} ${piece.king ? 'king' : ''}"></span>` : ''
     }</button>`;
   }).join('');
   document.querySelector('#undoCheckers').disabled = !checkersUndo.length;
   document.querySelector('#checkersMoves').textContent = checkers.moves;
+  restoreGridFocus(checkersBoardElement, checkersFocus, hadFocus);
 }
 
 function finishCheckerTurn() {
@@ -922,7 +990,7 @@ function chooseCheckersAiMove() {
 function maybeCheckersAi() {
   if (document.querySelector('#checkersMode').value !== 'solo' || checkers.turn !== 'dark' || checkers.over || checkersAiThinking) return;
   checkersAiThinking = true;
-  checkersMessage.textContent = 'David-Pi is thinking…';
+  checkersMessage.textContent = `${window.davidPiServerName || "Home server"} is thinking…`;
   setTimeout(() => {
     const move = checkers.forced !== null
       ? checkerMoves(checkers.board, checkers.forced, true)[0]
@@ -934,6 +1002,7 @@ function maybeCheckersAi() {
 
 function moveChecker(from, move) {
   checkersUndo.push(JSON.stringify(checkers));
+  checkersFocus = move.to;
   checkers.board[move.to] = checkers.board[from];
   checkers.board[from] = null;
   if (move.capture !== null) checkers.board[move.capture] = null;
@@ -949,13 +1018,13 @@ function moveChecker(from, move) {
       checkers.legal = more;
       checkers.forced = move.to;
       checkersMessage.textContent = 'Keep jumping with the same piece.';
-      renderCheckers();
+      renderCheckers(true);
       maybeCheckersAi();
       return;
     }
   }
   finishCheckerTurn();
-  renderCheckers();
+  renderCheckers(true);
   maybeCheckersAi();
 }
 
@@ -964,6 +1033,7 @@ checkersBoardElement.addEventListener('click', (event) => {
   const square = event.target.closest('.strategy-square');
   if (!square) return;
   const index = Number(square.dataset.index);
+  checkersFocus = index;
   const move = checkers.legal.find((item) => item.to === index);
   if (checkers.selected !== null && move) {
     moveChecker(checkers.selected, move);
@@ -980,7 +1050,11 @@ checkersBoardElement.addEventListener('click', (event) => {
     checkers.selected = null;
     checkers.legal = [];
   }
-  renderCheckers();
+  renderCheckers(true);
+});
+checkersBoardElement.addEventListener('keydown', (event) => {
+  const index = moveGridFocus(event, checkersBoardElement, 8);
+  if (index !== null) checkersFocus = index;
 });
 document.querySelector('#newCheckers').addEventListener('click', newCheckers);
 document.querySelector('#checkersMode').addEventListener('change', newCheckers);

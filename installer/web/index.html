@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Set up your home server</title>
+  <link rel="stylesheet" href="/setup.css">
+  <script src="/setup.js" defer></script>
+</head>
+<body>
+<main>
+  <p class="eyebrow">YOUR PRIVATE HOME SERVER</p>
+  <h1>Make yourself at home.</h1>
+  <p>Choose a name, a place for your files, and the features your household needs. You can change modules later.</p>
+  <p id="error" role="alert" hidden></p>
+  <section id="claim">
+    <h2>Claim your server</h2>
+    <p>Open this page with the Tailscale account you selected in the terminal, then paste the one-use token shown there. It expires in 15 minutes.</p>
+    <form id="claim-form">
+      <label>Private claim token<input id="token" type="password" autocomplete="off" required></label>
+      <button>Claim server</button>
+    </form>
+  </section>
+  <form id="wizard" hidden>
+    <section>
+      <h2>1. Name your home</h2>
+      <label>Website display name<input id="display-name" maxlength="80" value="My Home" required></label>
+      <label>Your name<input id="owner-name" maxlength="80" required></label>
+      <p id="address"></p>
+      <p>The server hostname was selected before connecting Tailscale. The display name can be changed independently at any time.</p>
+      <label for="timezone-search">Find your timezone</label>
+      <input id="timezone-search" type="search" placeholder="Search a city or region, for example Denver" aria-controls="timezone" autocomplete="off">
+      <div class="row">
+        <div>
+          <label for="timezone">Timezone</label>
+          <select id="timezone" required aria-describedby="timezone-help"></select>
+        </div>
+        <label>Movie availability country<input id="country" value="US" maxlength="2" pattern="[A-Za-z]{2}" required aria-describedby="country-help"></label>
+      </div>
+      <p id="timezone-help" class="hint"></p>
+      <p id="timezone-results" class="hint" role="status"></p>
+      <p id="country-help" class="hint">Use a two-letter country code, such as US, GB, or CA. Streaming availability depends on the country.</p>
+    </section>
+    <section>
+      <h2>2. Choose storage and backups</h2>
+      <p>Choose from the prepared local storage found on this server. Setup creates a dedicated folder and preserves everything outside it. Blank drives must be prepared separately.</p>
+      <button id="refresh-storage" type="button" class="secondary">Refresh storage choices</button>
+      <p id="storage-warning" class="notice" role="status" hidden></p>
+      <label for="storage-choice">Store your household’s content on</label>
+      <select id="storage-choice" required aria-describedby="storage-help"></select>
+      <p id="storage-help" class="hint"></p>
+      <div id="storage-manual" hidden>
+        <label>Storage type<select id="storage-mode" disabled><option value="folder">Existing local folder</option><option value="drive">Prepared ext4 drive mount point</option></select></label>
+        <label>Existing parent folder or mount point<input id="storage-parent" value="/srv" disabled></label>
+        <p class="hint">Advanced: enter an existing folder on a local ext4 filesystem. Setup does not format drives or create the parent folder.</p>
+      </div>
+      <p>Application content will live in a dedicated <strong>david-pi-data</strong> folder on your choice.</p>
+      <label for="backup-choice">Independent backup location</label>
+      <select id="backup-choice" required aria-describedby="backup-help"></select>
+      <p id="backup-help" class="hint"></p>
+      <div id="backup-manual" hidden>
+        <label>Existing backup parent folder<input id="backup-parent" placeholder="/mnt/backup" disabled></label>
+        <p class="hint">Advanced: choose an existing folder on a different local ext4 drive.</p>
+      </div>
+      <p>Backups use a dedicated <strong>david-pi-backups</strong> folder. You may skip backups and configure them later. Without an independent backup, disk failure can lose your content.</p>
+    </section>
+    <section>
+      <h2>3. Select your modules</h2>
+      <p>Disabled modules keep their content and keys. Phone Backup requires Media.</p>
+      <div id="modules" class="modules"></div>
+    </section>
+    <section>
+      <h2>4. Optional services</h2>
+      <article>
+        <h3>Movie Night discovery</h3>
+        <p>Your own TMDB developer account supplies search and country-specific streaming availability. Review provider terms and any applicable costs. Search terms and country go to TMDB; never enter streaming subscription passwords. With no key, your manual watchlist remains available.</p>
+        <a href="https://developer.themoviedb.org/docs/getting-started" target="_blank" rel="noreferrer">Create a TMDB Read Access Token</a>
+        <label>TMDB Read Access Token<input id="tmdb" type="password" autocomplete="new-password"></label>
+        <button type="button" data-test="movies">Test connection</button><button type="button" data-skip="tmdb">Skip / configure later</button>
+        <p>Provider availability by JustWatch. This product uses the TMDB API but is not endorsed or certified by TMDB.</p>
+      </article>
+      <article>
+        <h3>Recipe discovery</h3>
+        <p>Local recipes and meal planning work without an account. Online discovery sends search terms to TheMealDB and needs your own licensed API key; provider charges may apply.</p>
+        <a href="https://www.themealdb.com/api.php" target="_blank" rel="noreferrer">Review TheMealDB access and terms</a>
+        <label>TheMealDB API key<input id="mealdb" type="password" autocomplete="new-password"></label>
+        <button type="button" data-test="recipes">Test connection</button><button type="button" data-skip="mealdb">Skip / configure later</button>
+      </article>
+      <article>
+        <h3>Chat notifications</h3>
+        <p>Text and supported images work using a locally generated encryption key. GIF search and native Android push alerts are not available in this release.</p>
+        <label class="check"><input type="checkbox" id="web-push"> Enable optional browser notifications</label>
+        <p>Browser push uses your browser vendor’s delivery service. Subscription details are kept on your server. Each browser must also grant permission.</p>
+      </article>
+      <article>
+        <h3>Pi-hole</h3>
+        <p>Optional network-wide DNS blocking requires a separate, deliberate DNS change. Finish this setup, then run <code>sudo david-pi pihole-setup</code> on the server for guided instructions. DNS settings are never changed here.</p>
+      </article>
+    </section>
+    <section>
+      <h2>5. Verify and start</h2>
+      <p>We will check storage, create local keys, and start only your selected features. The next screen shows each step as it finishes. Setup continues if you refresh this page.</p>
+      <button id="install">Install my home server</button>
+    </section>
+  </form>
+  <section id="progress" hidden aria-labelledby="progress-title">
+    <h2 id="progress-title" tabindex="-1">Setting up your home</h2>
+    <p id="phase" role="status" aria-live="polite" aria-atomic="true"></p>
+    <label id="progress-label" for="setup-progress">0 of 5 steps complete</label>
+    <progress id="setup-progress" max="5" value="0" aria-describedby="progress-explanation"></progress>
+    <p id="progress-explanation" class="hint">The bar counts completed steps. Some steps take longer than others.</p>
+    <ol id="progress-steps" class="steps"></ol>
+    <p id="elapsed" class="hint"></p>
+    <p id="progress-help" class="hint"></p>
+    <p id="recovery" class="notice" hidden>In the server’s terminal, run <code>sudo david-pi status</code> to check the saved operation and recovery guidance. After resolving the problem, choose “Check again” here.</p>
+    <label for="private-address">Your private website address</label>
+    <input id="private-address" readonly type="url" aria-describedby="private-address-help">
+    <p id="private-address-help" class="hint">Save this address. Your browser device must be connected to the same Tailscale network to open it.</p>
+    <button id="copy-address" type="button" class="secondary">Copy address</button>
+    <span id="copy-status" role="status"></span>
+    <button id="retry-status" type="button" class="secondary" hidden>Check again</button>
+    <a id="open" class="button-link" hidden>Open your home server</a>
+  </section>
+</main>
+<footer>Private access through Tailscale · Your data stays on your hardware</footer>
+</body>
+</html>

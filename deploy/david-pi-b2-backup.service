@@ -1,0 +1,48 @@
+[Unit]
+Description=David-Pi encrypted append-only B2 backup
+After=network-online.target docker.service david-pi-data-backup.service
+Wants=network-online.target
+ConditionPathIsMountPoint=/srv/backup-data
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+UMask=0077
+LoadCredential=manifest-key:/etc/david-pi/backup-manifest.key
+LoadCredential=b2-account-id:/etc/david-pi/b2/account-id
+LoadCredential=b2-account-key:/etc/david-pi/b2/account-key
+LoadCredential=restic-repository:/etc/david-pi/b2/restic-repository
+LoadCredential=restic-password:/etc/david-pi/b2/restic-password
+Environment=DAVID_PI_BACKUP_MANIFEST_SIGNING_KEY_FILE=manifest-key
+Environment=DAVID_PI_B2_ACCOUNT_ID_FILE=b2-account-id
+Environment=DAVID_PI_B2_ACCOUNT_KEY_FILE=b2-account-key
+Environment=DAVID_PI_RESTIC_REPOSITORY_FILE=restic-repository
+Environment=DAVID_PI_RESTIC_PASSWORD_FILE=restic-password
+Environment=DAVID_PI_RESTIC_CACHE_DIR=/var/cache/david-pi-restic
+Environment=DAVID_PI_B2_STATUS_FILE=/var/lib/david-pi-b2-backup/status.json
+ExecStart=/usr/local/sbin/david-pi-b2-backup
+RuntimeDirectory=david-pi-b2-backup
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=no
+StateDirectory=david-pi-b2-backup
+StateDirectoryMode=0700
+CacheDirectory=david-pi-restic
+CacheDirectoryMode=0700
+PrivateTmp=yes
+PrivateDevices=yes
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadOnlyPaths=/srv/backup-data
+ReadWritePaths=/var/cache/david-pi-restic /run/david-pi-b2-backup /var/lib/david-pi-b2-backup
+TimeoutStartSec=12h
+Nice=15
+IOSchedulingClass=idle

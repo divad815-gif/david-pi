@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=auto">
+  <meta name="theme-color" content="#fffaf2">
+  <meta name="color-scheme" content="light">
+  <script src="/static/theme-bootstrap.js?v=8"></script>
+  <script src="/static/installation.js?v=2"></script>
+  <title>Offline audiobooks · Home server</title>
+  <link rel="stylesheet" href="/static/app.css?v=40">
+  <link rel="stylesheet" href="/static/platform.css?v=26">
+  <link rel="stylesheet" href="/static/audiobooks-offline.css?v=7">
+  <link rel="stylesheet" href="/static/david-pi-ui.css?v=16">
+</head>
+<body class="module-page audiobook-page" data-offline-shelf="true">
+  <header class="module-bar">
+    <a class="back" href="/audiobooks" aria-label="Back to audiobooks">&larr;</a>
+    <div><p data-server-name>Home server</p><h1>Offline audiobooks</h1></div>
+  </header>
+  <main class="module-shell offline-audiobook-shell">
+    <section class="module-intro">
+      <div>
+        <p class="sheet-kicker">On this browser</p>
+        <h2>Books you explicitly saved.</h2>
+        <p>Only shared-shelf books can be saved here. Interrupted saves resume the next time you tap Save offline. Copies remain playable by anyone using this browser profile until removed, even if David-Pi access is revoked. Do not use this on a shared or public browser. Browser storage may also be cleared by the browser or operating system. For dependable background playback, use Save offline in the Android app.</p>
+      </div>
+    </section>
+    <section class="offline-readiness" aria-labelledby="offlineReadinessTitle">
+      <div class="offline-readiness-heading">
+        <div><p class="sheet-kicker">Trip readiness</p><h2 id="offlineReadinessTitle">Know what will work before you leave.</h2></div>
+        <span class="offline-connection" id="offlineConnection" role="status">Checking connection…</span>
+      </div>
+      <dl class="offline-readiness-stats">
+        <div><dt>Ready offline</dt><dd id="offlineCompleteCount">—</dd></div>
+        <div><dt>Can resume</dt><dd id="offlinePartialCount">—</dd></div>
+        <div><dt>Browser space</dt><dd id="offlineAvailableSpace">—</dd></div>
+      </dl>
+      <p id="offlineStorageNote">Checking this browser’s offline storage…</p>
+    </section>
+    <section class="offline-partials" id="offlinePartials" aria-labelledby="offlinePartialsTitle" hidden>
+      <div><p class="sheet-kicker">Interrupted downloads</p><h2 id="offlinePartialsTitle">Finish these while connected.</h2></div>
+      <div class="offline-partial-list" id="offlinePartialList"></div>
+      <a href="/audiobooks">Return to the shelf to resume</a>
+    </section>
+    <section class="offline-player" id="offlinePlayer" aria-labelledby="offlinePlayerTitle" hidden>
+      <strong id="offlinePlayerTitle"></strong>
+      <span id="offlinePlayerAuthor"></span>
+      <audio id="offlineAudio" controls preload="metadata" aria-label="Offline audiobook player"></audio>
+    </section>
+    <p id="offlineShelfState" role="status">Loading saved books…</p>
+    <button class="offline-test" id="testOfflineBooks" type="button" hidden>Test offline now</button>
+    <button class="offline-remove-all" id="removeAllOfflineBooks" type="button" hidden>Remove all browser copies</button>
+    <section class="offline-audiobook-grid" id="offlineAudiobookGrid" aria-label="Saved offline audiobooks" aria-busy="true"></section>
+  </main>
+  <script src="/static/david-pi-ui.js?v=15"></script>
+  <script src="/static/audiobook-progress.js?v=4"></script>
+  <script src="/static/sha256-stream.js?v=1"></script>
+  <script src="/static/audiobook-offline-web.js?v=10"></script>
+  <script src="/static/audiobooks-offline-page.js?v=9"></script>
+</body>
+</html>

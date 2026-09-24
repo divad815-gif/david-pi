@@ -15,6 +15,8 @@
     <application
         android:name=".DavidPiBackupApp"
         android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="false"
         android:icon="@drawable/david_pi_launcher"
         android:label="David-Pi"
         android:theme="@style/Theme.DavidPiBackup"
@@ -28,10 +30,11 @@
             android:exported="false"
             android:foregroundServiceType="mediaPlayback" />
         <service
-            android:name=".ChatPushService"
-            android:exported="false">
+            android:name=".offline.OfflinePlaybackService"
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback">
             <intent-filter>
-                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+                <action android:name="androidx.media3.session.MediaSessionService" />
             </intent-filter>
         </service>
         <receiver android:name=".NativeMediaCommandReceiver" android:exported="false" />

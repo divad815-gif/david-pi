@@ -82,9 +82,7 @@ const { chromium } = require('playwright');
     }
     await page.locator('.conversation-delete').click();
     const deleteDialogVisible = await page.locator('#deleteChatDialog').isVisible();
-    const deleteDisabledInitially = await page.locator('#confirmDeleteChat').isDisabled();
-    await page.locator('#deleteChatPhrase').fill('DELETE CHAT');
-    const deleteEnabledAfterPhrase = await page.locator('#confirmDeleteChat').isEnabled();
+    const leaveEnabled = await page.locator('#confirmDeleteChat').isEnabled();
     await page.locator('#cancelDeleteChat').click();
     const deleteDialogClosed = await page.locator('#deleteChatDialog').isHidden();
     await page.locator('.conversation').click();
@@ -109,8 +107,7 @@ const { chromium } = require('playwright');
       conversationRowVisible,
       conversationAvatarIsFixed,
       deleteDialogVisible,
-      deleteDisabledInitially,
-      deleteEnabledAfterPhrase,
+      leaveEnabled,
       deleteDialogClosed,
       destructiveRequestCount: destructiveRequests.length,
       messageCount: await page.locator('.bubble').count(),
@@ -125,7 +122,7 @@ const { chromium } = require('playwright');
       !result.sendVisible || !result.emojiHiddenInitially || !result.emojiVisibleAfterClick ||
       !result.installedWebAppClass || !result.textareaFocused || !result.draftPreserved || !result.singleConversationOpened || !result.threadDeleteAbsent || !result.listDeleteVisible ||
       !result.conversationRowVisible || !result.conversationAvatarIsFixed || !result.deleteDialogVisible ||
-      !result.deleteDisabledInitially || !result.deleteEnabledAfterPhrase || !result.deleteDialogClosed ||
+      !result.leaveEnabled || !result.deleteDialogClosed ||
       result.destructiveRequestCount !== 0 || result.messageCount < 50 ||
       result.failedResponses.some((failure) => !failure.url.endsWith('/favicon.ico')))) {
     process.exitCode = 1;

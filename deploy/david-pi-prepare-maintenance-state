@@ -1,0 +1,1191 @@
+#!/usr/bin/env python3
+"""Create-only preparation for all isolated worker state directories.
+
+The production CLI has no path or identity overrides. Existing objects are
+never repaired: every reviewed owner, group, mode, inode, device, mount, and
+sentinel invariant must already match or startup fails closed.  A new
+worker directory is configured under a private, unpredictable staging
+directory and is published with ``renameat2(RENAME_NOREPLACE)`` only after all
+metadata is final. Consequently a public name is never repaired or exposed in
+an intermediate ownership/mode state. Audiobook originals and their contents
+are opened only to validate the storage topology; they are never changed.
+"""
+
+from __future__ import annotations
+
+import ctypes
+import errno
+import os
+from pathlib import Path
+import secrets
+import stat
+import subprocess
+import sys
+from typing import Callable, Iterable
+
+
+DATA_ROOT = Path("/srv/data/family-photos")
+SENTINEL_NAME = ".david-pi-storage"
+SENTINEL_VALUE = b"david-pi-family-storage-v1"
+SENTINEL_UID = 0
+SENTINEL_GID = 0
+SENTINEL_MODE = 0o644
+OPERATIONS_NAME = ".david-pi-operations"
+MAINTENANCE_NAME = "maintenance"
+OPERATIONS_UID = 0
+OPERATIONS_GID = 0
+OPERATIONS_MODE = 0o755
+MAINTENANCE_UID = 10002
+MAINTENANCE_GID = 10001
+MAINTENANCE_MODE = 0o750
+TRANSACTION_PREFIX = ".maintenance-prepare-v2-"
+AUDIOBOOK_ROOT_NAME = "audiobooks"
+AUDIOBOOK_ORIGINALS_NAME = "originals"
+AUDIOBOOK_INCOMING_NAME = "incoming"
+AUDIOBOOK_STATE_NAME = "audiobook"
+AUDIOBOOK_STREAMING_NAME = "streaming"
+AUDIOBOOK_UID = 10001
+AUDIOBOOK_GID = 10001
+AUDIOBOOK_PARENT_MODE = 0o755
+AUDIOBOOK_STATE_MODE = 0o750
+AUDIOBOOK_TRANSACTION_PREFIX = ".audiobook-state-prepare-v1-"
+TRANSACTION_MODE = 0o700
+TRANSACTION_PAYLOAD = "payload"
+TRANSACTION_ATTEMPTS = 8
+KNOWN_WRITERS = (
+    "family-photo-portal",
+    "david-pi-maintenance",
+    "david-pi-chat-notifier",
+    "david-pi-audiobook-preparer",
+    "david-pi-mytube-preparer",
+    "david-pi-device-backup-worker",
+    "david-pi-slideshow-worker",
+)
+
+# These are deployment preconditions, not values this helper will repair.
+PRODUCTION_CHAIN = (
+    (Path("/"), 0, 0, 0o755),
+    (Path("/srv"), 0, 0, 0o755),
+    (Path("/srv/data"), 0, 0, 0o755),
+    (DATA_ROOT, 0, 0, 0o755),
+)
+PRODUCTION_MOUNT_BOUNDARIES = frozenset({Path("/srv/data")})
+
+_DIRECTORY_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW
+_SENTINEL_FLAGS = os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK
+_OPENAT2_NUMBER = 437 if sys.platform.startswith("linux") else None
+_RESOLVE_NO_XDEV = 0x01
+_RESOLVE_NO_MAGICLINKS = 0x02
+_RESOLVE_NO_SYMLINKS = 0x04
+_RESOLVE_BENEATH = 0x08
+_AT_FDCWD = -100
+_AT_SYMLINK_NOFOLLOW = 0x100
+_AT_EMPTY_PATH = 0x1000
+_STATX_MNT_ID = 0x00001000
+_RENAME_NOREPLACE = 1
+_LIBC = ctypes.CDLL(None, use_errno=True)
+_LIBC.syscall.restype = ctypes.c_long
+_STATX_FUNCTION = getattr(_LIBC, "statx", None)
+_RENAMEAT2_FUNCTION = getattr(_LIBC, "renameat2", None)
+_openat2_available = _OPENAT2_NUMBER is not None
+
+
+class _StatxTimestamp(ctypes.Structure):
+    _fields_ = [
+        ("tv_sec", ctypes.c_int64),
+        ("tv_nsec", ctypes.c_uint32),
+        ("reserved", ctypes.c_int32),
+    ]
+
+
+class _Statx(ctypes.Structure):
+    _fields_ = [
+        ("mask", ctypes.c_uint32),
+        ("blksize", ctypes.c_uint32),
+        ("attributes", ctypes.c_uint64),
+        ("nlink", ctypes.c_uint32),
+        ("uid", ctypes.c_uint32),
+        ("gid", ctypes.c_uint32),
+        ("mode", ctypes.c_uint16),
+        ("spare0", ctypes.c_uint16),
+        ("ino", ctypes.c_uint64),
+        ("size", ctypes.c_uint64),
+        ("blocks", ctypes.c_uint64),
+        ("attributes_mask", ctypes.c_uint64),
+        ("atime", _StatxTimestamp),
+        ("btime", _StatxTimestamp),
+        ("ctime", _StatxTimestamp),
+        ("mtime", _StatxTimestamp),
+        ("rdev_major", ctypes.c_uint32),
+        ("rdev_minor", ctypes.c_uint32),
+        ("dev_major", ctypes.c_uint32),
+        ("dev_minor", ctypes.c_uint32),
+        ("mnt_id", ctypes.c_uint64),
+        ("dio_mem_align", ctypes.c_uint32),
+        ("dio_offset_align", ctypes.c_uint32),
+        ("spare3", ctypes.c_uint64 * 12),
+    ]
+
+
+if _STATX_FUNCTION is not None:
+    _STATX_FUNCTION.argtypes = (
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_int,
+        ctypes.c_uint,
+        ctypes.POINTER(_Statx),
+    )
+    _STATX_FUNCTION.restype = ctypes.c_int
+
+if _RENAMEAT2_FUNCTION is not None:
+    _RENAMEAT2_FUNCTION.argtypes = (
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_uint,
+    )
+    _RENAMEAT2_FUNCTION.restype = ctypes.c_int
+
+
+class PreparationError(RuntimeError):
+    """A storage or writer invariant failed before safe preparation."""
+
+
+class _PinnedDirectory:
+    def __init__(
+        self,
+        parent_fd: int | None,
+        name: str,
+        full_path: Path,
+        fd: int,
+        mount_id: int,
+    ):
+        self.parent_fd = parent_fd
+        self.name = name
+        self.full_path = full_path
+        self.fd = fd
+        self.mount_id = mount_id
+
+
+def _identity(value: os.stat_result) -> tuple[int, int]:
+    return value.st_dev, value.st_ino
+
+
+def _mode(value: os.stat_result) -> int:
+    return stat.S_IMODE(value.st_mode)
+
+
+def _statx_mount_id(directory_fd: int, name: bytes, flags: int) -> int:
+    if _STATX_FUNCTION is None or ctypes.sizeof(_Statx) != 256:
+        raise PreparationError("statx mount identity is unavailable")
+    result = _Statx()
+    if (
+        _STATX_FUNCTION(directory_fd, name, flags, _STATX_MNT_ID, ctypes.byref(result))
+        != 0
+    ):
+        error_number = ctypes.get_errno()
+        raise PreparationError("statx mount identity check failed") from OSError(
+            error_number, os.strerror(error_number)
+        )
+    if not result.mask & _STATX_MNT_ID:
+        raise PreparationError("statx mount identity was not returned")
+    return int(result.mnt_id)
+
+
+def _mount_id_fd(fd: int) -> int:
+    return _statx_mount_id(fd, b"", _AT_EMPTY_PATH | _AT_SYMLINK_NOFOLLOW)
+
+
+def _mount_id_at(parent_fd: int, name: str) -> int:
+    return _statx_mount_id(parent_fd, os.fsencode(name), _AT_SYMLINK_NOFOLLOW)
+
+
+def _open_at(parent_fd: int, name: str, flags: int, *, no_xdev: bool) -> int:
+    """Open one component and independently enforce mount identity."""
+    global _openat2_available
+    if "/" in name or name in ("", ".", ".."):
+        raise PreparationError("invalid relative storage component")
+    fd = -1
+    if _openat2_available:
+        resolve = _RESOLVE_BENEATH | _RESOLVE_NO_MAGICLINKS | _RESOLVE_NO_SYMLINKS
+        if no_xdev:
+            resolve |= _RESOLVE_NO_XDEV
+        how = (ctypes.c_uint64 * 3)(flags, 0, resolve)
+        result = _LIBC.syscall(
+            _OPENAT2_NUMBER,
+            parent_fd,
+            os.fsencode(name),
+            ctypes.byref(how),
+            ctypes.sizeof(how),
+        )
+        if result >= 0:
+            fd = int(result)
+        else:
+            error_number = ctypes.get_errno()
+            if error_number == errno.ENOSYS:
+                _openat2_available = False
+            else:
+                raise OSError(error_number, os.strerror(error_number), name)
+    if fd < 0:
+        fd = os.open(name, flags, dir_fd=parent_fd)
+    try:
+        parent_mount = _mount_id_fd(parent_fd)
+        child_mount = _mount_id_fd(fd)
+        parent_device = os.fstat(parent_fd).st_dev
+        child_device = os.fstat(fd).st_dev
+        if no_xdev and (child_mount != parent_mount or child_device != parent_device):
+            raise PreparationError("cross-device or mount boundary rejected")
+        return fd
+    except Exception:
+        os.close(fd)
+        raise
+
+
+def _open_directory_at(parent_fd: int, name: str, *, no_xdev: bool = True) -> int:
+    try:
+        return _open_at(parent_fd, name, _DIRECTORY_FLAGS, no_xdev=no_xdev)
+    except OSError as error:
+        raise PreparationError(
+            f"unsafe or unavailable directory component: {name}"
+        ) from error
+
+
+def _node_for(parent: _PinnedDirectory, name: str, fd: int) -> _PinnedDirectory:
+    try:
+        mount_id = _mount_id_fd(fd)
+    except Exception:
+        os.close(fd)
+        raise
+    return _PinnedDirectory(parent.fd, name, parent.full_path / name, fd, mount_id)
+
+
+def _assert_path_identity(node: _PinnedDirectory) -> os.stat_result:
+    descriptor = os.fstat(node.fd)
+    if not stat.S_ISDIR(descriptor.st_mode):
+        raise PreparationError(f"directory invariant failed: {node.name}")
+    descriptor_mount = _mount_id_fd(node.fd)
+    if node.parent_fd is None:
+        current = os.stat("/", follow_symlinks=False)
+        path_mount = _statx_mount_id(_AT_FDCWD, b"/", _AT_SYMLINK_NOFOLLOW)
+    else:
+        try:
+            current = os.stat(node.name, dir_fd=node.parent_fd, follow_symlinks=False)
+            path_mount = _mount_id_at(node.parent_fd, node.name)
+        except OSError as error:
+            raise PreparationError(f"directory path changed: {node.name}") from error
+    if (
+        not stat.S_ISDIR(current.st_mode)
+        or _identity(current) != _identity(descriptor)
+        or descriptor_mount != node.mount_id
+        or path_mount != node.mount_id
+    ):
+        raise PreparationError(f"directory path or mount changed: {node.name}")
+    return descriptor
+
+
+def _open_absolute_directory(path: Path) -> list[_PinnedDirectory]:
+    if not path.is_absolute() or any(
+        part in ("", ".", "..") for part in path.parts[1:]
+    ):
+        raise PreparationError("data root must be an absolute normalized path")
+    nodes: list[_PinnedDirectory] = []
+    try:
+        root_fd = os.open("/", _DIRECTORY_FLAGS)
+        try:
+            root_mount = _mount_id_fd(root_fd)
+        except Exception:
+            os.close(root_fd)
+            raise
+        root = _PinnedDirectory(None, "/", Path("/"), root_fd, root_mount)
+        nodes.append(root)
+        parent = root
+        for component in path.parts[1:]:
+            # The reviewed chain includes the intentional /srv/data mount.
+            child_fd = _open_directory_at(parent.fd, component, no_xdev=False)
+            child = _node_for(parent, component, child_fd)
+            nodes.append(child)
+            _assert_path_identity(child)
+            parent = child
+        return nodes
+    except Exception:
+        _close_nodes(nodes)
+        raise
+
+
+def _close_nodes(nodes: Iterable[_PinnedDirectory]) -> None:
+    for node in reversed(tuple(nodes)):
+        try:
+            os.close(node.fd)
+        except OSError:
+            pass
+
+
+def _assert_metadata(
+    node: _PinnedDirectory,
+    uid: int,
+    gid: int,
+    mode: int,
+    label: str,
+) -> os.stat_result:
+    details = _assert_path_identity(node)
+    if details.st_uid != uid or details.st_gid != gid or _mode(details) != mode:
+        raise PreparationError(f"{label} owner, group, or mode drifted")
+    return details
+
+
+def _assert_expected_chain(
+    nodes: list[_PinnedDirectory],
+    expected_chain: tuple[tuple[Path, int, int, int], ...],
+    allowed_mount_boundaries: frozenset[Path],
+) -> None:
+    expected_paths = tuple(item[0] for item in expected_chain)
+    actual_suffix = tuple(node.full_path for node in nodes[-len(expected_paths) :])
+    if not expected_paths or actual_suffix != expected_paths:
+        raise PreparationError("reviewed storage ancestor chain does not match")
+    for node in nodes:
+        _assert_path_identity(node)
+    reviewed_nodes = nodes[-len(expected_paths) :]
+    for previous, node in zip(reviewed_nodes, reviewed_nodes[1:]):
+        boundary = node.mount_id != previous.mount_id
+        if boundary != (node.full_path in allowed_mount_boundaries):
+            raise PreparationError("reviewed storage mount topology drifted")
+    if not allowed_mount_boundaries.issubset(set(expected_paths)):
+        raise PreparationError("reviewed mount boundary is outside the trusted chain")
+    for node, (_path, uid, gid, mode) in zip(reviewed_nodes, expected_chain):
+        _assert_metadata(node, uid, gid, mode, f"storage ancestor {node.name}")
+        if mode & 0o022:
+            raise PreparationError("reviewed storage ancestor is application-writable")
+
+
+def _stable_stat(value: os.stat_result) -> tuple[int, ...]:
+    return (
+        value.st_dev,
+        value.st_ino,
+        value.st_nlink,
+        value.st_mode,
+        value.st_uid,
+        value.st_gid,
+        value.st_size,
+        value.st_mtime_ns,
+        value.st_ctime_ns,
+    )
+
+
+def _read_sentinel(
+    base: _PinnedDirectory,
+    sentinel_uid: int,
+    sentinel_gid: int,
+    sentinel_mode: int,
+) -> tuple[int, os.stat_result, int]:
+    try:
+        sentinel_fd = _open_at(base.fd, SENTINEL_NAME, _SENTINEL_FLAGS, no_xdev=True)
+    except OSError as error:
+        raise PreparationError("storage sentinel is missing or unsafe") from error
+    try:
+        before = os.fstat(sentinel_fd)
+        sentinel_mount = _mount_id_fd(sentinel_fd)
+        if not stat.S_ISREG(before.st_mode):
+            raise PreparationError("storage sentinel is not a regular file")
+        if before.st_nlink != 1:
+            raise PreparationError("storage sentinel must be singly linked")
+        if (
+            before.st_uid != sentinel_uid
+            or before.st_gid != sentinel_gid
+            or _mode(before) != sentinel_mode
+        ):
+            raise PreparationError("storage sentinel owner, group, or mode drifted")
+        maximum = len(SENTINEL_VALUE) + 1
+        if before.st_size < len(SENTINEL_VALUE) or before.st_size > maximum:
+            raise PreparationError("storage sentinel has an invalid size")
+        content = os.read(sentinel_fd, maximum + 1)
+        if content not in (SENTINEL_VALUE, SENTINEL_VALUE + b"\n"):
+            raise PreparationError("storage sentinel content is invalid")
+        after = os.fstat(sentinel_fd)
+        if _stable_stat(before) != _stable_stat(after):
+            raise PreparationError("storage sentinel changed while being checked")
+        _assert_sentinel(base, sentinel_fd, after, sentinel_mount)
+        return sentinel_fd, after, sentinel_mount
+    except Exception:
+        os.close(sentinel_fd)
+        raise
+
+
+def _assert_sentinel(
+    base: _PinnedDirectory,
+    sentinel_fd: int,
+    original: os.stat_result,
+    original_mount: int,
+) -> None:
+    current_fd = os.fstat(sentinel_fd)
+    descriptor_mount = _mount_id_fd(sentinel_fd)
+    if _stable_stat(current_fd) != _stable_stat(original):
+        raise PreparationError("storage sentinel changed")
+    if not stat.S_ISREG(current_fd.st_mode) or current_fd.st_nlink != 1:
+        raise PreparationError("storage sentinel became unsafe")
+    os.lseek(sentinel_fd, 0, os.SEEK_SET)
+    content = os.read(sentinel_fd, len(SENTINEL_VALUE) + 2)
+    if content not in (SENTINEL_VALUE, SENTINEL_VALUE + b"\n"):
+        raise PreparationError("storage sentinel content changed")
+    after_read = os.fstat(sentinel_fd)
+    if _stable_stat(after_read) != _stable_stat(original):
+        raise PreparationError("storage sentinel changed while being revalidated")
+    try:
+        current_path = os.stat(SENTINEL_NAME, dir_fd=base.fd, follow_symlinks=False)
+        path_mount = _mount_id_at(base.fd, SENTINEL_NAME)
+    except OSError as error:
+        raise PreparationError("storage sentinel path changed") from error
+    if (
+        not stat.S_ISREG(current_path.st_mode)
+        or _identity(current_path) != _identity(current_fd)
+        or current_path.st_nlink != 1
+        or current_fd.st_dev != os.fstat(base.fd).st_dev
+        or descriptor_mount != original_mount
+        or path_mount != original_mount
+        or original_mount != base.mount_id
+    ):
+        raise PreparationError("storage sentinel path or mount changed")
+
+
+def verify_writers_stopped() -> None:
+    try:
+        result = subprocess.run(
+            ["docker", "ps", "--format", "{{.Names}}"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+            env={"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C"},
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise PreparationError("writer stop verification unavailable") from error
+    if result.returncode != 0 or len(result.stdout) > 1024 * 1024:
+        raise PreparationError("writer stop verification failed")
+    running = set(result.stdout.splitlines())
+    if running.intersection(KNOWN_WRITERS):
+        raise PreparationError("a known application writer is still running")
+
+
+def _open_existing_directory(
+    parent: _PinnedDirectory,
+    name: str,
+) -> _PinnedDirectory | None:
+    try:
+        fd = _open_at(parent.fd, name, _DIRECTORY_FLAGS, no_xdev=True)
+    except FileNotFoundError:
+        return None
+    except OSError as error:
+        raise PreparationError(f"unsafe protected directory: {name}") from error
+    node = _node_for(parent, name, fd)
+    try:
+        _assert_path_identity(node)
+        return node
+    except Exception:
+        os.close(fd)
+        raise
+
+
+def _mkdir_at_exact(parent: _PinnedDirectory, name: str, mode: int) -> _PinnedDirectory:
+    previous_umask = os.umask(0)
+    try:
+        os.mkdir(name, mode, dir_fd=parent.fd)
+    except OSError as error:
+        raise PreparationError(
+            f"could not create protected directory: {name}"
+        ) from error
+    finally:
+        os.umask(previous_umask)
+    fd = _open_directory_at(parent.fd, name)
+    return _node_for(parent, name, fd)
+
+
+def _directory_is_empty(fd: int) -> bool:
+    """Inspect a pinned directory without reopening it by pathname."""
+    try:
+        return not os.listdir(fd)
+    except OSError as error:
+        raise PreparationError("could not inspect private staging directory") from error
+
+
+def _create_private_transaction(
+    parent: _PinnedDirectory,
+    operations_uid: int,
+    operations_gid: int,
+    *,
+    prefix: str = TRANSACTION_PREFIX,
+    label: str = "private maintenance transaction",
+) -> _PinnedDirectory:
+    """Create a fresh transaction root without adopting any existing object."""
+    for _attempt in range(TRANSACTION_ATTEMPTS):
+        name = f"{prefix}{secrets.token_hex(24)}"
+        try:
+            transaction = _mkdir_at_exact(parent, name, TRANSACTION_MODE)
+        except PreparationError as error:
+            cause = error.__cause__
+            if isinstance(cause, FileExistsError):
+                continue
+            raise
+        _assert_metadata(
+            transaction,
+            operations_uid,
+            operations_gid,
+            TRANSACTION_MODE,
+            label,
+        )
+        if not _directory_is_empty(transaction.fd):
+            raise PreparationError(f"new {label} is not empty")
+        return transaction
+    raise PreparationError(f"could not allocate {label}")
+
+
+def _rename_noreplace_at(
+    source_parent_fd: int,
+    source_name: str,
+    destination_parent_fd: int,
+    destination_name: str,
+    *,
+    label: str = "maintenance directory",
+) -> None:
+    """Atomically publish a directory without ever replacing the final name."""
+    if _RENAMEAT2_FUNCTION is None:
+        raise PreparationError("renameat2(RENAME_NOREPLACE) is unavailable")
+    result = _RENAMEAT2_FUNCTION(
+        source_parent_fd,
+        os.fsencode(source_name),
+        destination_parent_fd,
+        os.fsencode(destination_name),
+        _RENAME_NOREPLACE,
+    )
+    if result != 0:
+        error_number = ctypes.get_errno()
+        if error_number in (errno.EEXIST, errno.ENOTEMPTY):
+            raise PreparationError(
+                f"{label} appeared during atomic publication"
+            ) from FileExistsError(error_number, os.strerror(error_number))
+        if error_number == errno.ENOSYS:
+            raise PreparationError(
+                "renameat2(RENAME_NOREPLACE) is unavailable"
+            ) from OSError(error_number, os.strerror(error_number))
+        raise PreparationError(f"{label} publication failed") from OSError(
+            error_number, os.strerror(error_number)
+        )
+
+
+def _prepare_rebuildable_directory(
+    *,
+    base: _PinnedDirectory,
+    parent: _PinnedDirectory,
+    name: str,
+    uid: int,
+    gid: int,
+    mode: int,
+    label: str,
+    transaction_prefix: str,
+    validate_context: Callable[[], None],
+    extra_nodes: list[_PinnedDirectory],
+    hook: Callable[[str], None],
+    hook_name: str,
+) -> _PinnedDirectory:
+    """Validate an existing final directory or atomically create it.
+
+    Metadata-changing syscalls are permitted only on a fresh payload beneath a
+    root-owned private transaction. Existing public objects are never repaired,
+    opened for writing, emptied, or removed.
+    """
+    existing = _open_existing_directory(parent, name)
+    if existing is not None:
+        extra_nodes.append(existing)
+        _assert_metadata(existing, uid, gid, mode, label)
+        hook(f"{hook_name}:before_finish")
+        validate_context()
+        _assert_metadata(existing, uid, gid, mode, label)
+        return existing
+
+    transaction: _PinnedDirectory | None = None
+    payload: _PinnedDirectory | None = None
+    base_metadata = os.fstat(base.fd)
+    transaction_label = f"private {label} transaction"
+    payload_label = f"private {label} payload"
+
+    def validate_transaction() -> None:
+        validate_context()
+        if transaction is None:
+            raise PreparationError(f"{transaction_label} is missing")
+        _assert_metadata(
+            transaction,
+            base_metadata.st_uid,
+            base_metadata.st_gid,
+            TRANSACTION_MODE,
+            transaction_label,
+        )
+        if payload is not None:
+            _assert_path_identity(payload)
+
+    hook(f"{hook_name}:before_transaction")
+    validate_context()
+    transaction = _create_private_transaction(
+        base,
+        base_metadata.st_uid,
+        base_metadata.st_gid,
+        prefix=transaction_prefix,
+        label=transaction_label,
+    )
+    extra_nodes.append(transaction)
+    hook(f"{hook_name}:after_transaction")
+    validate_transaction()
+
+    payload = _mkdir_at_exact(transaction, TRANSACTION_PAYLOAD, TRANSACTION_MODE)
+    extra_nodes.append(payload)
+    _assert_metadata(
+        payload,
+        base_metadata.st_uid,
+        base_metadata.st_gid,
+        TRANSACTION_MODE,
+        payload_label,
+    )
+    if not _directory_is_empty(payload.fd):
+        raise PreparationError(f"new {payload_label} is not empty")
+    hook(f"{hook_name}:after_payload")
+
+    if base_metadata.st_uid != uid or base_metadata.st_gid != gid:
+        hook(f"{hook_name}:before_fchown")
+        validate_transaction()
+        _assert_metadata(
+            payload,
+            base_metadata.st_uid,
+            base_metadata.st_gid,
+            TRANSACTION_MODE,
+            payload_label,
+        )
+        os.fchown(payload.fd, uid, gid)
+        hook(f"{hook_name}:after_fchown")
+        validate_transaction()
+        _assert_metadata(
+            payload,
+            uid,
+            gid,
+            TRANSACTION_MODE,
+            f"configured {payload_label}",
+        )
+
+    hook(f"{hook_name}:before_fchmod")
+    validate_transaction()
+    _assert_metadata(
+        payload,
+        uid,
+        gid,
+        TRANSACTION_MODE,
+        f"configured {payload_label}",
+    )
+    os.fchmod(payload.fd, mode)
+    hook(f"{hook_name}:after_fchmod")
+    validate_transaction()
+    _assert_metadata(
+        payload,
+        uid,
+        gid,
+        mode,
+        f"configured {payload_label}",
+    )
+    if not _directory_is_empty(payload.fd):
+        raise PreparationError(f"configured {payload_label} is not empty")
+
+    os.fsync(payload.fd)
+    os.fsync(transaction.fd)
+    os.fsync(base.fd)
+    os.fsync(parent.fd)
+    hook(f"{hook_name}:before_publish")
+    validate_transaction()
+    _assert_metadata(
+        payload,
+        uid,
+        gid,
+        mode,
+        f"configured {payload_label}",
+    )
+    if not _directory_is_empty(payload.fd):
+        raise PreparationError(f"configured {payload_label} is not empty")
+    _rename_noreplace_at(
+        transaction.fd,
+        TRANSACTION_PAYLOAD,
+        parent.fd,
+        name,
+        label=label,
+    )
+    payload.parent_fd = parent.fd
+    payload.name = name
+    payload.full_path = parent.full_path / name
+    hook(f"{hook_name}:after_publish")
+
+    # The public inode is complete. Never mutate or path-delete it, even if a
+    # subsequent validation detects a raced parent replacement.
+    validate_context()
+    _assert_metadata(payload, uid, gid, mode, label)
+    if not _directory_is_empty(payload.fd):
+        raise PreparationError(f"new {label} is not empty")
+    os.fsync(parent.fd)
+    os.fsync(transaction.fd)
+    os.fsync(base.fd)
+    hook(f"{hook_name}:before_finish")
+    validate_context()
+    _assert_metadata(payload, uid, gid, mode, label)
+    return payload
+
+
+def prepare_state(
+    data_root: Path = DATA_ROOT,
+    *,
+    operations_uid: int = OPERATIONS_UID,
+    operations_gid: int = OPERATIONS_GID,
+    maintenance_uid: int = MAINTENANCE_UID,
+    maintenance_gid: int = MAINTENANCE_GID,
+    sentinel_uid: int = SENTINEL_UID,
+    sentinel_gid: int = SENTINEL_GID,
+    sentinel_mode: int = SENTINEL_MODE,
+    expected_chain: tuple[tuple[Path, int, int, int], ...] | None = None,
+    allowed_mount_boundaries: frozenset[Path] | None = None,
+    require_root: bool = True,
+    writer_check: Callable[[], None] | None = None,
+    _test_hook: Callable[[str], None] | None = None,
+) -> None:
+    """Validate immutable preconditions and create only missing descendants."""
+    data_root = Path(data_root)
+    if require_root and (os.geteuid() != 0 or os.getegid() != 0):
+        raise PreparationError("maintenance-state preparation must run as root:root")
+    if expected_chain is None:
+        if data_root != DATA_ROOT:
+            raise PreparationError("production preparation path cannot be overridden")
+        expected_chain = PRODUCTION_CHAIN
+        allowed_mount_boundaries = PRODUCTION_MOUNT_BOUNDARIES
+    elif allowed_mount_boundaries is None:
+        allowed_mount_boundaries = frozenset()
+    check_writers = writer_check or verify_writers_stopped
+    check_writers()
+    chain = _open_absolute_directory(data_root)
+    extra_nodes: list[_PinnedDirectory] = []
+    sentinel_fd = -1
+    try:
+        _assert_expected_chain(chain, expected_chain, allowed_mount_boundaries)
+        base = chain[-1]
+        sentinel_fd, sentinel, sentinel_mount = _read_sentinel(
+            base, sentinel_uid, sentinel_gid, sentinel_mode
+        )
+
+        def hook(phase: str) -> None:
+            if _test_hook is not None:
+                _test_hook(phase)
+
+        def validate_base() -> None:
+            check_writers()
+            _assert_expected_chain(chain, expected_chain, allowed_mount_boundaries)
+            _assert_sentinel(base, sentinel_fd, sentinel, sentinel_mount)
+
+        operations = _open_existing_directory(base, OPERATIONS_NAME)
+        if operations is None:
+            hook("before_mkdir_operations")
+            validate_base()
+            operations = _mkdir_at_exact(base, OPERATIONS_NAME, OPERATIONS_MODE)
+            extra_nodes.append(operations)
+        else:
+            extra_nodes.append(operations)
+        _assert_metadata(
+            operations,
+            operations_uid,
+            operations_gid,
+            OPERATIONS_MODE,
+            "operations directory",
+        )
+
+        def validate_operations() -> None:
+            validate_base()
+            _assert_metadata(
+                operations,
+                operations_uid,
+                operations_gid,
+                OPERATIONS_MODE,
+                "operations directory",
+            )
+
+        maintenance = _open_existing_directory(operations, MAINTENANCE_NAME)
+        if maintenance is not None:
+            extra_nodes.append(maintenance)
+            _assert_metadata(
+                maintenance,
+                maintenance_uid,
+                maintenance_gid,
+                MAINTENANCE_MODE,
+                "maintenance directory",
+            )
+            hook("before_finish")
+            validate_operations()
+            _assert_metadata(
+                maintenance,
+                maintenance_uid,
+                maintenance_gid,
+                MAINTENANCE_MODE,
+                "maintenance directory",
+            )
+            return
+
+        # The public name remains absent until a completely configured, empty
+        # payload is atomically published.  A crash before publication can
+        # leave only an unpredictable private transaction name; a subsequent
+        # invocation never adopts or mutates such an object and can proceed
+        # with a fresh transaction.  A crash after publication leaves the
+        # exact final state and is therefore naturally idempotent.
+        transaction: _PinnedDirectory | None = None
+        payload: _PinnedDirectory | None = None
+        base_metadata = os.fstat(base.fd)
+
+        def validate_transaction() -> None:
+            validate_operations()
+            if transaction is None:
+                raise PreparationError("private maintenance transaction is missing")
+            _assert_metadata(
+                transaction,
+                base_metadata.st_uid,
+                base_metadata.st_gid,
+                TRANSACTION_MODE,
+                "private maintenance transaction",
+            )
+            if payload is not None:
+                _assert_path_identity(payload)
+
+        try:
+            hook("before_mkdir_maintenance")
+            validate_operations()
+            transaction = _create_private_transaction(
+                base, base_metadata.st_uid, base_metadata.st_gid
+            )
+            extra_nodes.append(transaction)
+            hook("after_mkdir_transaction")
+            validate_transaction()
+
+            payload = _mkdir_at_exact(
+                transaction, TRANSACTION_PAYLOAD, TRANSACTION_MODE
+            )
+            extra_nodes.append(payload)
+            _assert_metadata(
+                payload,
+                operations_uid,
+                operations_gid,
+                TRANSACTION_MODE,
+                "new private maintenance payload",
+            )
+            if not _directory_is_empty(payload.fd):
+                raise PreparationError("new private maintenance payload is not empty")
+            hook("after_mkdir_payload")
+
+            if operations_uid != maintenance_uid or operations_gid != maintenance_gid:
+                hook("before_fchown")
+                validate_transaction()
+                _assert_metadata(
+                    payload,
+                    operations_uid,
+                    operations_gid,
+                    TRANSACTION_MODE,
+                    "new private maintenance payload",
+                )
+                os.fchown(payload.fd, maintenance_uid, maintenance_gid)
+                hook("after_fchown")
+                validate_transaction()
+                _assert_metadata(
+                    payload,
+                    maintenance_uid,
+                    maintenance_gid,
+                    TRANSACTION_MODE,
+                    "configured private maintenance payload",
+                )
+
+            hook("before_fchmod")
+            validate_transaction()
+            _assert_metadata(
+                payload,
+                maintenance_uid,
+                maintenance_gid,
+                TRANSACTION_MODE,
+                "configured private maintenance payload",
+            )
+            os.fchmod(payload.fd, MAINTENANCE_MODE)
+            hook("after_fchmod")
+            validate_transaction()
+            _assert_metadata(
+                payload,
+                maintenance_uid,
+                maintenance_gid,
+                MAINTENANCE_MODE,
+                "configured private maintenance payload",
+            )
+            if not _directory_is_empty(payload.fd):
+                raise PreparationError("private maintenance payload is not empty")
+
+            # Persist the configured inode and both directory-entry namespaces
+            # before the single publication syscall.
+            os.fsync(payload.fd)
+            os.fsync(transaction.fd)
+            os.fsync(base.fd)
+            os.fsync(operations.fd)
+            hook("before_publish")
+            validate_transaction()
+            _assert_metadata(
+                payload,
+                maintenance_uid,
+                maintenance_gid,
+                MAINTENANCE_MODE,
+                "configured private maintenance payload",
+            )
+            if not _directory_is_empty(payload.fd):
+                raise PreparationError("private maintenance payload is not empty")
+            _rename_noreplace_at(
+                transaction.fd,
+                TRANSACTION_PAYLOAD,
+                operations.fd,
+                MAINTENANCE_NAME,
+            )
+            payload.parent_fd = operations.fd
+            payload.name = MAINTENANCE_NAME
+            payload.full_path = operations.full_path / MAINTENANCE_NAME
+            hook("after_publish")
+
+            # No chmod/chown or other metadata-changing operation occurs after
+            # the public name becomes visible.
+            validate_operations()
+            _assert_metadata(
+                payload,
+                maintenance_uid,
+                maintenance_gid,
+                MAINTENANCE_MODE,
+                "maintenance directory",
+            )
+            if not _directory_is_empty(payload.fd):
+                raise PreparationError("new maintenance directory is not empty")
+            os.fsync(operations.fd)
+            os.fsync(transaction.fd)
+            # There is no race-free Linux pathname operation that removes the
+            # exact already-open directory inode. A same-name replacement can
+            # occur after any identity check and before rmdir(2), so automatic
+            # cleanup would risk deleting an unrelated directory. Retain the
+            # now-empty transaction envelope as explicit operator evidence.
+            os.fsync(base.fd)
+            os.fsync(operations.fd)
+            hook("before_finish")
+            validate_operations()
+            _assert_metadata(
+                payload,
+                maintenance_uid,
+                maintenance_gid,
+                MAINTENANCE_MODE,
+                "maintenance directory",
+            )
+        except Exception:
+            # Never delete a transaction or payload by pathname on failure.
+            # Its unpredictable root-owned envelope is retained for explicit
+            # operator review and preserves forensic evidence. Retries neither
+            # inspect nor adopt it. BaseException (including process death)
+            # follows the same retention contract naturally.
+            raise
+    finally:
+        if sentinel_fd >= 0:
+            os.close(sentinel_fd)
+        _close_nodes(extra_nodes)
+        _close_nodes(chain)
+
+
+def prepare_audiobook_state(
+    data_root: Path = DATA_ROOT,
+    *,
+    operations_uid: int = OPERATIONS_UID,
+    operations_gid: int = OPERATIONS_GID,
+    audiobook_uid: int = AUDIOBOOK_UID,
+    audiobook_gid: int = AUDIOBOOK_GID,
+    sentinel_uid: int = SENTINEL_UID,
+    sentinel_gid: int = SENTINEL_GID,
+    sentinel_mode: int = SENTINEL_MODE,
+    expected_chain: tuple[tuple[Path, int, int, int], ...] | None = None,
+    allowed_mount_boundaries: frozenset[Path] | None = None,
+    require_root: bool = True,
+    writer_check: Callable[[], None] | None = None,
+    _test_hook: Callable[[str], None] | None = None,
+) -> None:
+    """Create only the three reviewed, rebuildable audiobook directories.
+
+    The audiobook library root, originals, incoming root, and operations root
+    are immutable deployment preconditions. This function never creates,
+    repairs, or traverses audiobook originals.
+    """
+    data_root = Path(data_root)
+    if require_root and (os.geteuid() != 0 or os.getegid() != 0):
+        raise PreparationError("audiobook-state preparation must run as root:root")
+    if expected_chain is None:
+        if data_root != DATA_ROOT:
+            raise PreparationError("production preparation path cannot be overridden")
+        expected_chain = PRODUCTION_CHAIN
+        allowed_mount_boundaries = PRODUCTION_MOUNT_BOUNDARIES
+    elif allowed_mount_boundaries is None:
+        allowed_mount_boundaries = frozenset()
+
+    check_writers = writer_check or verify_writers_stopped
+    check_writers()
+    chain = _open_absolute_directory(data_root)
+    extra_nodes: list[_PinnedDirectory] = []
+    sentinel_fd = -1
+    targets: list[_PinnedDirectory] = []
+    try:
+        _assert_expected_chain(chain, expected_chain, allowed_mount_boundaries)
+        base = chain[-1]
+        sentinel_fd, sentinel, sentinel_mount = _read_sentinel(
+            base, sentinel_uid, sentinel_gid, sentinel_mode
+        )
+
+        def hook(phase: str) -> None:
+            if _test_hook is not None:
+                _test_hook(phase)
+
+        def require_directory(
+            parent: _PinnedDirectory,
+            name: str,
+            uid: int,
+            gid: int,
+            mode: int,
+            label: str,
+        ) -> _PinnedDirectory:
+            node = _open_existing_directory(parent, name)
+            if node is None:
+                raise PreparationError(f"required {label} is missing")
+            extra_nodes.append(node)
+            _assert_metadata(node, uid, gid, mode, label)
+            return node
+
+        operations = require_directory(
+            base,
+            OPERATIONS_NAME,
+            operations_uid,
+            operations_gid,
+            OPERATIONS_MODE,
+            "operations directory",
+        )
+        audiobook_root = require_directory(
+            base,
+            AUDIOBOOK_ROOT_NAME,
+            audiobook_uid,
+            audiobook_gid,
+            AUDIOBOOK_PARENT_MODE,
+            "audiobook library root",
+        )
+        # The originals directory is pinned and metadata-validated, but its
+        # entries are never listed or opened. It is never a creation target.
+        originals = require_directory(
+            audiobook_root,
+            AUDIOBOOK_ORIGINALS_NAME,
+            audiobook_uid,
+            audiobook_gid,
+            AUDIOBOOK_PARENT_MODE,
+            "audiobook originals directory",
+        )
+        incoming = require_directory(
+            audiobook_root,
+            AUDIOBOOK_INCOMING_NAME,
+            audiobook_uid,
+            audiobook_gid,
+            AUDIOBOOK_PARENT_MODE,
+            "audiobook incoming directory",
+        )
+
+        def validate_context() -> None:
+            check_writers()
+            _assert_expected_chain(chain, expected_chain, allowed_mount_boundaries)
+            _assert_sentinel(base, sentinel_fd, sentinel, sentinel_mount)
+            _assert_metadata(
+                operations,
+                operations_uid,
+                operations_gid,
+                OPERATIONS_MODE,
+                "operations directory",
+            )
+            for node, label in (
+                (audiobook_root, "audiobook library root"),
+                (originals, "audiobook originals directory"),
+                (incoming, "audiobook incoming directory"),
+            ):
+                _assert_metadata(
+                    node,
+                    audiobook_uid,
+                    audiobook_gid,
+                    AUDIOBOOK_PARENT_MODE,
+                    label,
+                )
+            for node in targets:
+                _assert_metadata(
+                    node,
+                    audiobook_uid,
+                    audiobook_gid,
+                    AUDIOBOOK_STATE_MODE,
+                    "audiobook rebuildable directory",
+                )
+
+        for parent, name, hook_name, label in (
+            (
+                operations,
+                AUDIOBOOK_STATE_NAME,
+                "state",
+                "audiobook worker-state directory",
+            ),
+            (
+                audiobook_root,
+                AUDIOBOOK_STREAMING_NAME,
+                "streaming",
+                "audiobook streaming directory",
+            ),
+            (
+                incoming,
+                AUDIOBOOK_STREAMING_NAME,
+                "incoming-streaming",
+                "audiobook incoming streaming directory",
+            ),
+        ):
+            target = _prepare_rebuildable_directory(
+                base=base,
+                parent=parent,
+                name=name,
+                uid=audiobook_uid,
+                gid=audiobook_gid,
+                mode=AUDIOBOOK_STATE_MODE,
+                label=label,
+                transaction_prefix=f"{AUDIOBOOK_TRANSACTION_PREFIX}{hook_name}-",
+                validate_context=validate_context,
+                extra_nodes=extra_nodes,
+                hook=hook,
+                hook_name=hook_name,
+            )
+            targets.append(target)
+
+        hook("before_finish")
+        validate_context()
+    finally:
+        if sentinel_fd >= 0:
+            os.close(sentinel_fd)
+        _close_nodes(extra_nodes)
+        _close_nodes(chain)
+
+
+def prepare_worker_state() -> None:
+    """Production entry point: prepare maintenance, then audiobook state."""
+    # Each phase is independently idempotent. A crash between phases can only
+    # leave complete rebuildable directories or private transaction evidence;
+    # Compose is not started until both phases return successfully.
+    prepare_state()
+    prepare_audiobook_state()
+
+
+def main() -> int:
+    try:
+        prepare_worker_state()
+    except (OSError, PreparationError) as error:
+        print(f"david-pi-worker-state: failed: {error}", file=sys.stderr)
+        return 1
+    print("david-pi-worker-state: ready")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

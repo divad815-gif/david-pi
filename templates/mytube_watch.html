@@ -1,0 +1,31 @@
+{%- set davidpi_theme = 'dark' if request is defined and request.cookies.get('davidPiThemeV1') == 'dark' else 'light' -%}
+<!doctype html>
+<html lang="en" data-theme="{{ davidpi_theme }}">
+<head>
+  <meta name="server-name" content="{{ server_name }}">
+  <script type="application/json" id="installation-config">{{ public_installation|tojson }}</script>
+  <script src="/static/installation.js?v=2"></script>
+  <meta name="audiobook-progress-scope" content="{{ audiobook_progress_scope }}">
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=auto">
+  <meta name="csrf-token" content="{{ csrf_token }}"><meta name="mytube-video-id" content="{{ initial_video_id }}">
+  <meta name="theme-color" content="#fffaf2">
+  <meta name="color-scheme" content="{{ davidpi_theme }}">
+  <script src="/static/theme-bootstrap.js?v=8"></script>
+  <title>Watch · MyTube · {{ server_name }}</title>
+  <link rel="stylesheet" href="/static/app.css?v=40"><link rel="stylesheet" href="/static/platform.css?v=26">
+  <link rel="stylesheet" href="/static/mytube.css?v=3"><link rel="stylesheet" href="/static/david-pi-ui.css?v=16">
+</head>
+<body class="module-page mytube-page mytube-watch-page">
+  <header class="module-bar mytube-bar"><a class="back" href="/mytube" aria-label="Back to MyTube">&larr;</a><a class="mytube-brand" href="/mytube"><span aria-hidden="true">▶</span><div><p>{{ server_name }}</p><h1>MyTube</h1></div></a></header>
+  <main class="mytube-watch-shell">
+    <section class="mytube-player-panel" id="mytubeWatchPanel" aria-busy="true">
+      <div class="mytube-player-frame"><video id="mytubePlayer" controls playsinline preload="metadata"></video><div class="mytube-player-state" id="mytubePlayerState"><span class="module-spinner" aria-hidden="true"></span><p>Getting the video ready…</p></div></div>
+      <div class="mytube-watch-copy"><p class="mytube-watch-status" id="mytubeWatchStatus">MyTube</p><h2 id="mytubeWatchTitle">Loading…</h2><p id="mytubeWatchDescription"></p><div class="mytube-watch-meta" id="mytubeWatchMeta"></div><a id="mytubeDownload" class="secondary-button" download hidden>Download original video</a></div>
+    </section>
+    <aside class="mytube-up-next" aria-labelledby="mytubeUpNextHeading"><div class="mytube-section-title"><h2 id="mytubeUpNextHeading">Up next</h2></div><div id="mytubeUpNext"></div></aside>
+  </main>
+  <div class="toast" id="platformToast" hidden role="status"></div>
+  <script src="/static/vendor/hls/hls.min.js" defer></script><script src="/static/david-pi-ui.js?v=15" defer></script>
+  <script src="/static/mytube.js?v=4" defer></script>
+</body>
+</html>

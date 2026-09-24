@@ -1,45 +1,48 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
-
 SELF="$(readlink -f "${BASH_SOURCE[0]}")"
 ROOT="$(cd "$(dirname "$SELF")" && pwd -P)"
 export DAVID_PI_CLI_ROOT="$ROOT"
-
 usage() {
-  cat <<'EOF'
-Usage: david-pi COMMAND
-
-Commands:
-  setup            Run or resume guided installation
-  preflight        Inspect compatibility without changing the host
-  prepare-storage  Explicitly prepare an unformatted data disk
-  status           Show a concise service and storage summary
-  verify           Verify security, storage, networking and selected features
-  update           Install a verified newer release without touching data
-  backup           Start source/database and configured data backups
-  restore-test     Verify a backup in an isolated temporary directory
-  repair           Reapply units/configuration and run verification
-  support-bundle   Create a sanitized diagnostic archive
-  uninstall-app    Remove application services; preserve all data
-EOF
+  cat <<'HELP'
+Usage: sudo david-pi COMMAND
+  setup              Run or resume private browser installation
+  renew-claim [--admin LOGIN]  Renew setup code; correct an unclaimed account locally
+  prepare-recovery   Prepare a clean replacement machine from a verified release
+  preflight          Check host compatibility without changing it
+  status             Show configuration and recent operation results
+  address            Show the saved private website link (no claim token)
+  verify             Verify selected services and storage identity
+  update [--version EXACT_BETA]  Install stable, or an explicitly selected testing update
+  update-check       Show available stable release
+  update-snapshots [--remove ID]  Inspect or deliberately remove local update snapshots
+  backup             Start a consistent independent backup
+  restore-test       Verify saved backup hashes and databases
+  restore            Choose a backup and empty recovery destination
+  restore --snapshot DIRECTORY --data-root EMPTY_DIRECTORY  Use explicit paths
+  repair             Resume installed service setup without deleting data
+  recover-admin LOGIN [--name NAME]  Recover administrator access locally
+  reconnect --accept-origin HTTPS_ORIGIN  Accept the node's actual Tailscale address locally
+  pihole-setup       Explain deliberate optional Pi-hole/DNS setup
+  prepare-storage    Explain preparation of existing ext4 storage
+  support-bundle     Create a sanitized local diagnostic summary
+  uninstall-app      Stop/remove application services; preserve data
+HELP
 }
-
 command_name="${1:-}"
 shift || true
-
 case "$command_name" in
   setup) source "$ROOT/installer/lib/setup.sh"; dp_setup "$@" ;;
+  prepare-recovery) source "$ROOT/installer/lib/recovery.sh"; dp_prepare_recovery "$@" ;;
   preflight) source "$ROOT/installer/lib/preflight.sh"; dp_preflight "$@" ;;
-  prepare-storage) source "$ROOT/installer/lib/storage.sh"; dp_prepare_storage "$@" ;;
-  status) source "$ROOT/installer/lib/verify.sh"; dp_status "$@" ;;
-  verify) source "$ROOT/installer/lib/verify.sh"; dp_verify "$@" ;;
-  update) source "$ROOT/installer/lib/manage.sh"; dp_update "$@" ;;
-  backup) source "$ROOT/installer/lib/manage.sh"; dp_backup "$@" ;;
-  restore-test) source "$ROOT/installer/lib/manage.sh"; dp_restore_test "$@" ;;
-  repair) source "$ROOT/installer/lib/manage.sh"; dp_repair "$@" ;;
+  status|address|verify|recover-admin|restore|reconnect|update-snapshots|renew-claim) exec python3 "$ROOT/installer/host.py" "$command_name" "$@" ;;
+  update|backup|repair) exec python3 "$ROOT/installer/host.py" operation "$command_name" "$@" ;;
+  update-check) exec python3 "$ROOT/installer/host.py" operation update_check "$@" ;;
+  restore-test) exec python3 "$ROOT/installer/host.py" operation restore_test "$@" ;;
+  prepare-storage) echo 'Prepare and mount an ext4 drive using your operating system tools, then run sudo david-pi setup. David-Pi does not format or repartition drives. Existing folders under /srv, /mnt, /media, /home and /opt are supported.' ;;
+  pihole-setup) source "$ROOT/installer/lib/pihole.sh"; dp_pihole_setup "$@" ;;
   support-bundle) source "$ROOT/installer/lib/manage.sh"; dp_support_bundle "$@" ;;
   uninstall-app) source "$ROOT/installer/lib/manage.sh"; dp_uninstall_app "$@" ;;
   -h|--help|help|'') usage ;;
   *) echo "Unknown command: $command_name" >&2; usage >&2; exit 2 ;;
 esac
-

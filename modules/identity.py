@@ -6,6 +6,7 @@ from functools import wraps
 from flask import current_app, g, request
 
 from .platform import PLATFORM_DATA, connect, migrate
+from .installation import get_installation
 
 
 DB_PATH = PLATFORM_DATA / "platform.db"
@@ -30,6 +31,10 @@ def current_device():
         name = str(make_header(decode_header(name))) if name else ""
     except (LookupError, UnicodeError):
         name = ""
+    config = get_installation()
+    member = next((m for m in config["members"] if m["login"] == login), None) if config else None
+    if member:
+        name = member["name"]
     return {
         # Keep the legacy profile neutral for modules where identity is only a label.
         "profile": "home",

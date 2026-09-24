@@ -3,22 +3,52 @@
 set -Eeuo pipefail
 umask 077
 
-SOURCE=/srv/data/family-photos
-DESTINATION=/srv/backup-data
+SOURCE=${DAVID_PI_DATA_SOURCE:-/srv/data/family-photos}
+DESTINATION=${DAVID_PI_BACKUP_DESTINATION:-/srv/backup-data}
+EXPECTED_BACKUP_UUID=${DAVID_PI_BACKUP_UUID:-261b31d1-2a78-45ce-bd86-df31f2977282}
 SENTINEL="$DESTINATION/.david-pi-backup-storage"
 EXPECTED_SENTINEL=david-pi-independent-backup-v1
-STATE=/etc/david-pi/install-state.env
+EXPECTED_SOURCE_SENTINEL=${DAVID_PI_SOURCE_SENTINEL_VALUE:-david-pi-family-storage-v1}
 SNAPSHOTS="$DESTINATION/snapshots"
-KEEP_SNAPSHOTS="${DAVID_PI_BACKUP_KEEP:-14}"
-STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+PRUNE_ENABLED=${DAVID_PI_BACKUP_PRUNE_ENABLED:-0}
+MAX_QUIESCENCE_SECONDS=1800
+MANIFEST_TOOL=${DAVID_PI_BACKUP_MANIFEST_TOOL:-/usr/local/sbin/david_pi_snapshot_manifest.py}
+PATH_SAFETY_TOOL=${DAVID_PI_RECOVERY_PATH_TOOL:-/usr/local/sbin/david_pi_recovery_paths.py}
+MANIFEST_SIGNING_KEY_FILE=${DAVID_PI_BACKUP_MANIFEST_SIGNING_KEY_FILE:-/etc/david-pi/backup-manifest.key}
+LOCK_FILE=${DAVID_PI_DATA_BACKUP_LOCK_FILE:-/run/david-pi-data-backup/backup.lock}
+WRITER_TRANSITION_LOCK_DIRECTORY=${DAVID_PI_WRITER_TRANSITION_LOCK_DIRECTORY:-/run/david-pi-writer-transition}
+WRITER_READINESS=${DAVID_PI_WRITER_READINESS:-/usr/local/sbin/david-pi-writer-readiness}
+QUIESCENCE_HELPER=${DAVID_PI_BACKUP_QUIESCENCE_HELPER:-/usr/local/sbin/david_pi_backup_quiescence.py}
+FLOCK_BIN=${DAVID_PI_FLOCK_BIN:-/usr/bin/flock}
+STAT_BIN=${DAVID_PI_STAT_BIN:-/usr/bin/stat}
+ID_BIN=${DAVID_PI_ID_BIN:-/usr/bin/id}
+STAMP=$(date -u +%Y%m%dT%H%M%SZ)
 WORK="$SNAPSHOTS/.incomplete-$STAMP"
 FINAL="$SNAPSHOTS/$STAMP"
 LATEST="$SNAPSHOTS/latest"
-PORTAL_CONTAINER=family-photo-portal
-PORTAL_WAS_RUNNING=0
+WRITER_CONTAINERS=(david-pi-maintenance david-pi-chat-notifier david-pi-audiobook-preparer david-pi-mytube-preparer david-pi-device-backup-worker david-pi-slideshow-worker family-photo-portal)
+RUNNING_WRITERS=()
+BACKUP_DESTINATION_VERIFIED=0
+STORAGE_IDENTITIES_PINNED=0
 
 log() {
     printf '%s %s\n' "$(date -u +%FT%TZ)" "$*"
+}
+
+write_attempt_status() {
+    local state=$1 detail=$2
+    [ "$BACKUP_DESTINATION_VERIFIED" -eq 1 ] || return 0
+    if ! storage_identity_matches; then
+        log "ERROR: pinned storage changed; refusing to write backup attempt status" >&2
+        return 1
+    fi
+    printf '%s\n' \
+        "{\"schema_version\":1,\"completed_at\":\"$(date -u +%FT%TZ)\",\"snapshot\":\"$STAMP\",\"state\":\"$state\",\"detail\":\"$detail\"}" |
+        python3 "$PATH_SAFETY_TOOL" pinned-write-destination \
+            --destination "$DESTINATION" \
+            --destination-fd "$BACKUP_ROOT_FD" \
+            --destination-identity "$BACKUP_ROOT_IDENTITY" \
+            --name last-attempt.json >/dev/null
 }
 
 fail() {
@@ -26,146 +56,475 @@ fail() {
     exit 1
 }
 
-restart_portal() {
-    if [ "$PORTAL_WAS_RUNNING" -eq 1 ]; then
-        docker start "$PORTAL_CONTAINER" >/dev/null || true
-    fi
+storage_identity_matches() {
+    [ "$STORAGE_IDENTITIES_PINNED" -eq 1 ] || return 1
+    python3 "$PATH_SAFETY_TOOL" pinned-validate-sentinels \
+        --source "$SOURCE" --source-fd "$SOURCE_ROOT_FD" \
+        --source-identity "$SOURCE_ROOT_IDENTITY" \
+        --source-value "$EXPECTED_SOURCE_SENTINEL" \
+        --destination "$DESTINATION" --destination-fd "$BACKUP_ROOT_FD" \
+        --destination-identity "$BACKUP_ROOT_IDENTITY" \
+        --backup-value "$EXPECTED_SENTINEL" >/dev/null 2>&1 ||
+        return 1
+    [ "$(findmnt -no UUID -T "$SOURCE_ROOT_REF" 2>/dev/null)" = "$SOURCE_UUID" ] || return 1
+    [ "$(findmnt -no UUID -T "$BACKUP_ROOT_REF" 2>/dev/null)" = "$BACKUP_UUID" ] || return 1
+    [ "$(findmnt -no SOURCE -T "$SOURCE_ROOT_REF" 2>/dev/null)" = "$SOURCE_DEVICE" ] || return 1
+    [ "$(findmnt -no SOURCE -T "$BACKUP_ROOT_REF" 2>/dev/null)" = "$BACKUP_DEVICE" ] || return 1
+    [ "$(stat -Lc %d -- "$SOURCE_ROOT_REF" 2>/dev/null)" = "$SOURCE_ST_DEV" ] || return 1
+    [ "$(stat -Lc %d -- "$BACKUP_ROOT_REF" 2>/dev/null)" = "$BACKUP_ST_DEV" ] || return 1
+    python3 "$PATH_SAFETY_TOOL" validate-root-pin \
+        --path "$SOURCE" --fd "$SOURCE_ROOT_FD" \
+        --identity "$SOURCE_ROOT_IDENTITY" >/dev/null 2>&1 || return 1
+    python3 "$PATH_SAFETY_TOOL" validate-root-pin \
+        --path "$DESTINATION" --fd "$BACKUP_ROOT_FD" \
+        --identity "$BACKUP_ROOT_IDENTITY" >/dev/null 2>&1 || return 1
+    return 0
 }
-trap restart_portal EXIT
 
-[ "$(id -u)" -eq 0 ] || fail "must run as root"
-[ -r "$STATE" ] || fail "installer storage state is unavailable"
-# Root-owned installer state contains shell-escaped, non-secret choices only.
-. "$STATE"
-[ -n "${BACKUP_UUID:-}" ] || fail "expected backup UUID is not configured"
-mountpoint -q /srv/data || fail "production storage is not mounted"
+require_pinned_storage() {
+    storage_identity_matches || fail "pinned source or backup identity changed"
+}
+
+validate_work() {
+    python3 "$PATH_SAFETY_TOOL" pinned-validate-work \
+        --work-path "$WORK" --work-fd "$WORK_ROOT_FD" \
+        --work-identity "$WORK_ROOT_IDENTITY" >/dev/null ||
+        fail "working snapshot path validation failed"
+}
+
+resecure_work_roots() {
+    python3 "$PATH_SAFETY_TOOL" pinned-resecure-work \
+        --work-path "$WORK" --work-fd "$WORK_ROOT_FD" \
+        --work-identity "$WORK_ROOT_IDENTITY" >/dev/null ||
+        fail "could not resecure snapshot roots"
+}
+
+lock_directory_identity() {
+    local path=$1
+    "$STAT_BIN" -Lc '%d:%i:%u:%g:%a:%h' -- "$path"
+}
+
+acquire_writer_transition_lock() {
+    local expected identity descriptor_identity
+    [ ! -L "$WRITER_TRANSITION_LOCK_DIRECTORY" ] &&
+        [ -d "$WRITER_TRANSITION_LOCK_DIRECTORY" ] ||
+        fail "protected writer-transition lock directory is unavailable"
+    expected="$("$ID_BIN" -u):$("$ID_BIN" -g):700:2"
+    identity=$(lock_directory_identity "$WRITER_TRANSITION_LOCK_DIRECTORY") ||
+        fail "could not inspect writer-transition lock directory"
+    case "$identity" in
+        *:"$expected") ;;
+        *) fail "writer-transition lock directory metadata drifted" ;;
+    esac
+    exec 8<"$WRITER_TRANSITION_LOCK_DIRECTORY"
+    "$FLOCK_BIN" -n 8 || fail "another writer transition is already running"
+    descriptor_identity=$("$STAT_BIN" -Lc '%d:%i:%u:%g:%a:%h' -- /proc/self/fd/8) ||
+        fail "could not inspect pinned writer-transition lock"
+    [ "$descriptor_identity" = "$identity" ] ||
+        fail "writer-transition lock path changed"
+    [ "$(lock_directory_identity "$WRITER_TRANSITION_LOCK_DIRECTORY")" = "$identity" ] ||
+        fail "writer-transition lock path changed"
+}
+
+restart_writers() {
+    local index container failed=0
+    [ "${#RUNNING_WRITERS[@]}" -gt 0 ] || return 0
+    for ((index=${#RUNNING_WRITERS[@]}-1; index>=0; index--)); do
+        container=${RUNNING_WRITERS[$index]}
+        if ! storage_identity_matches; then
+            log "ERROR: pinned storage changed; refusing to restart writer $container" >&2
+            failed=1
+            continue
+        fi
+        if ! docker start "$container" >/dev/null; then
+            log "ERROR: could not restart writer $container" >&2
+            failed=1
+            continue
+        fi
+    done
+    if [ "$failed" -eq 0 ]; then
+        [ -x "$WRITER_READINESS" ] || {
+            log "ERROR: writer readiness helper is unavailable" >&2
+            return 1
+        }
+        "$WRITER_READINESS" --timeout 90 --interval 2 --stable-samples 3 || {
+            log "ERROR: application writers did not pass bounded readiness" >&2
+            failed=1
+        }
+    fi
+    return "$failed"
+}
+
+cleanup() {
+    local exit_status=$? restart_status=0
+    trap - EXIT
+    set +e
+    restart_writers
+    restart_status=$?
+    if [ "$restart_status" -eq 0 ] && [ -x "$QUIESCENCE_HELPER" ]; then
+        "$QUIESCENCE_HELPER" clear || restart_status=1
+    fi
+    if [ "$exit_status" -ne 0 ] || [ "$restart_status" -ne 0 ]; then
+        write_attempt_status failed "backup_or_writer_recovery_failed"
+    fi
+    if [ "$exit_status" -eq 0 ] && [ "$restart_status" -ne 0 ]; then
+        exit_status=1
+    fi
+    exit "$exit_status"
+}
+
+if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
+    return 0
+fi
+trap cleanup EXIT
+
+[ "$("$ID_BIN" -u)" -eq 0 ] || fail "must run as root"
+[ "$PRUNE_ENABLED" = 0 ] || fail "snapshot pruning is not implemented or authorized"
+mountpoint -q "$SOURCE" || mountpoint -q "$(dirname "$SOURCE")" ||
+    fail "production storage is not mounted"
 mountpoint -q "$DESTINATION" || fail "backup storage is not mounted"
-[ -f "$SENTINEL" ] || fail "backup sentinel is missing"
-[ "$(cat "$SENTINEL")" = "$EXPECTED_SENTINEL" ] || fail "backup sentinel is invalid"
-[ "$(findmnt -no UUID -T "$DESTINATION")" = "$BACKUP_UUID" ] ||
+[ -f "$PATH_SAFETY_TOOL" ] && [ ! -L "$PATH_SAFETY_TOOL" ] ||
+    fail "recovery path safety tool is missing or unsafe"
+exec {SOURCE_ROOT_FD}<"$SOURCE" || fail "could not pin production storage root"
+exec {BACKUP_ROOT_FD}<"$DESTINATION" || fail "could not pin backup storage root"
+SOURCE_ROOT_IDENTITY=$(python3 "$PATH_SAFETY_TOOL" describe-root-pin \
+    --path "$SOURCE" --fd "$SOURCE_ROOT_FD") || fail "could not pin production storage identity"
+BACKUP_ROOT_IDENTITY=$(python3 "$PATH_SAFETY_TOOL" describe-root-pin \
+    --path "$DESTINATION" --fd "$BACKUP_ROOT_FD") || fail "could not pin backup storage identity"
+SOURCE_ROOT_REF="/proc/self/fd/$SOURCE_ROOT_FD"
+BACKUP_ROOT_REF="/proc/self/fd/$BACKUP_ROOT_FD"
+python3 "$PATH_SAFETY_TOOL" pinned-validate-sentinels \
+    --source "$SOURCE" --source-fd "$SOURCE_ROOT_FD" \
+    --source-identity "$SOURCE_ROOT_IDENTITY" \
+    --source-value "$EXPECTED_SOURCE_SENTINEL" \
+    --destination "$DESTINATION" --destination-fd "$BACKUP_ROOT_FD" \
+    --destination-identity "$BACKUP_ROOT_IDENTITY" \
+    --backup-value "$EXPECTED_SENTINEL" >/dev/null ||
+    fail "production or backup sentinel validation failed"
+SOURCE_UUID=$(findmnt -no UUID -T "$SOURCE_ROOT_REF")
+BACKUP_UUID=$(findmnt -no UUID -T "$BACKUP_ROOT_REF")
+SOURCE_DEVICE=$(findmnt -no SOURCE -T "$SOURCE_ROOT_REF")
+BACKUP_DEVICE=$(findmnt -no SOURCE -T "$BACKUP_ROOT_REF")
+SOURCE_ST_DEV=$(stat -Lc %d -- "$SOURCE_ROOT_REF")
+BACKUP_ST_DEV=$(stat -Lc %d -- "$BACKUP_ROOT_REF")
+[ -n "$SOURCE_UUID" ] && [ -n "$BACKUP_UUID" ] || fail "filesystem UUID is unavailable"
+[ "$BACKUP_UUID" = "$EXPECTED_BACKUP_UUID" ] ||
     fail "unexpected backup filesystem"
-[ "$(findmnt -no SOURCE -T "$SOURCE")" != "$(findmnt -no SOURCE -T "$DESTINATION")" ] ||
+[ "$SOURCE_UUID" != "$BACKUP_UUID" ] || fail "source and destination share a filesystem UUID"
+[ "$SOURCE_ST_DEV" != "$BACKUP_ST_DEV" ] || fail "source and destination share st_dev"
+[ "$SOURCE_DEVICE" != "$BACKUP_DEVICE" ] ||
     fail "source and destination share a filesystem"
+readonly SOURCE_UUID BACKUP_UUID SOURCE_DEVICE BACKUP_DEVICE SOURCE_ST_DEV BACKUP_ST_DEV
+readonly SOURCE_ROOT_FD BACKUP_ROOT_FD SOURCE_ROOT_IDENTITY BACKUP_ROOT_IDENTITY
+readonly SOURCE_ROOT_REF BACKUP_ROOT_REF
+readonly EXPECTED_SOURCE_SENTINEL EXPECTED_SENTINEL
+[ -f "$MANIFEST_TOOL" ] || fail "snapshot manifest tool is missing"
+[ ! -L "$MANIFEST_SIGNING_KEY_FILE" ] && [ -f "$MANIFEST_SIGNING_KEY_FILE" ] ||
+    fail "snapshot manifest signing key is missing or unsafe"
+STORAGE_IDENTITIES_PINNED=1
+require_pinned_storage
 
-mkdir -p "$SNAPSHOTS"
-mapfile -t incomplete_snapshots < <(
-    find "$SNAPSHOTS" -mindepth 1 -maxdepth 1 -type d -name '.incomplete-20*T*Z' -print |
-        sort
-)
+LOCK_DIRECTORY=$(dirname "$LOCK_FILE")
+[ ! -L "$LOCK_DIRECTORY" ] && [ -d "$LOCK_DIRECTORY" ] || fail "private lock directory is unavailable"
+[ "$(stat -c %u "$LOCK_DIRECTORY")" = "$(id -u)" ] || fail "private lock directory owner is unsafe"
+[ "$(stat -c %a "$LOCK_DIRECTORY")" = 700 ] || fail "private lock directory mode is unsafe"
+if [ -e "$LOCK_FILE" ] || [ -L "$LOCK_FILE" ]; then
+    [ ! -L "$LOCK_FILE" ] && [ -f "$LOCK_FILE" ] || fail "backup lock path is unsafe"
+    [ "$(stat -c %u "$LOCK_FILE")" = "$(id -u)" ] || fail "backup lock owner is unsafe"
+fi
+require_pinned_storage
+exec 9>"$LOCK_FILE"
+flock -n 9 || fail "another data backup is already running"
+acquire_writer_transition_lock
+BACKUP_DESTINATION_VERIFIED=1
+
+require_pinned_storage
+python3 "$PATH_SAFETY_TOOL" pinned-prepare-root \
+    --path "$DESTINATION" --fd "$BACKUP_ROOT_FD" \
+    --identity "$BACKUP_ROOT_IDENTITY" >/dev/null ||
+    fail "snapshot root validation failed"
+INCOMPLETE_OUTPUT=$(python3 "$PATH_SAFETY_TOOL" pinned-list-incomplete \
+    --path "$DESTINATION" --fd "$BACKUP_ROOT_FD" \
+    --identity "$BACKUP_ROOT_IDENTITY") || fail "could not inspect incomplete snapshots"
+incomplete_snapshots=()
+if [ -n "$INCOMPLETE_OUTPUT" ]; then
+    mapfile -t incomplete_snapshots <<<"$INCOMPLETE_OUTPUT"
+fi
 if [ "${#incomplete_snapshots[@]}" -gt 1 ]; then
     fail "multiple incomplete snapshots require manual review"
 elif [ "${#incomplete_snapshots[@]}" -eq 1 ]; then
-    WORK="${incomplete_snapshots[0]}"
-    STAMP="${WORK##*/.incomplete-}"
+    WORK="$SNAPSHOTS/${incomplete_snapshots[0]}"
+    STAMP=${WORK##*/.incomplete-}
     FINAL="$SNAPSHOTS/$STAMP"
+    require_pinned_storage
+    WORK_FACTS=$(python3 "$PATH_SAFETY_TOOL" pinned-prepare-work \
+        --destination "$DESTINATION" --destination-fd "$BACKUP_ROOT_FD" \
+        --destination-identity "$BACKUP_ROOT_IDENTITY" \
+        --work-name ".incomplete-$STAMP" --resume) ||
+        fail "incomplete snapshot is unsafe"
     log "resuming incomplete snapshot $STAMP"
+else
+    STARTED_AT=$(date -u +%FT%TZ)
+    require_pinned_storage
+    WORK_FACTS=$(python3 "$PATH_SAFETY_TOOL" pinned-prepare-work \
+        --destination "$DESTINATION" --destination-fd "$BACKUP_ROOT_FD" \
+        --destination-identity "$BACKUP_ROOT_IDENTITY" \
+        --work-name ".incomplete-$STAMP" --started-at "$STARTED_AT") ||
+        fail "could not safely create the working snapshot"
 fi
-[ ! -e "$FINAL" ] || fail "snapshot already exists"
-mkdir -p "$WORK/data" "$WORK/config" "$WORK/databases"
+mapfile -t WORK_FACT_LINES <<<"$WORK_FACTS"
+[ "${#WORK_FACT_LINES[@]}" -eq 2 ] || fail "working snapshot pin facts are incomplete"
+STARTED_AT=${WORK_FACT_LINES[0]}
+WORK_ROOT_IDENTITY=${WORK_FACT_LINES[1]}
+exec {WORK_ROOT_FD}<"$WORK" || fail "could not retain the working snapshot descriptor"
+readonly WORK_ROOT_FD WORK_ROOT_IDENTITY
+validate_work
 
-LINK_DEST=()
-if [ -L "$LATEST" ] && [ -d "$LATEST/data" ]; then
-    LINK_DEST=(--link-dest="$LATEST/data")
+if [ -e "$LATEST" ] || [ -L "$LATEST" ]; then
+    LATEST_FACTS=$(python3 "$PATH_SAFETY_TOOL" resolve-latest \
+        --snapshots "$SNAPSHOTS" --latest "$LATEST") || fail "latest snapshot link is unsafe"
+    LINK_SNAPSHOT=${LATEST_FACTS%%$'\n'*}
+    python3 "$MANIFEST_TOOL" verify \
+        --snapshot "$LINK_SNAPSHOT" --manifest "$LINK_SNAPSHOT/MANIFEST.json" \
+        --signing-key-file "$MANIFEST_SIGNING_KEY_FILE" >/dev/null ||
+        fail "latest snapshot is not a valid signed snapshot"
 fi
+log "prior snapshot hard-link reuse is disabled so mutable work cannot alter signed history"
 
 log "copying immutable and application data"
-rsync -aHAX --numeric-ids --delete --delete-excluded \
-    --exclude='/incoming/***' \
-    --exclude='/tmp/***' \
-    --exclude='/files/incoming/***' \
-    --exclude='*.db' \
-    --exclude='*.db-wal' \
-    --exclude='*.db-shm' \
-    "${LINK_DEST[@]}" \
-    "$SOURCE/" "$WORK/data/"
-
-if docker inspect "$PORTAL_CONTAINER" >/dev/null 2>&1 &&
-   [ "$(docker inspect -f '{{.State.Running}}' "$PORTAL_CONTAINER")" = true ]; then
-    PORTAL_WAS_RUNNING=1
-    log "briefly pausing portal for a consistent final pass"
-    docker stop --time 45 "$PORTAL_CONTAINER" >/dev/null
+require_pinned_storage
+validate_work
+if ! python3 "$PATH_SAFETY_TOOL" pinned-sync-tree \
+    --source "$SOURCE" --source-fd "$SOURCE_ROOT_FD" \
+    --source-identity "$SOURCE_ROOT_IDENTITY" \
+    --work-path "$WORK" --work-fd "$WORK_ROOT_FD" \
+    --work-identity "$WORK_ROOT_IDENTITY" \
+    --relative data --profile data >/dev/null; then
+    log "initial live-data pass changed while copying; the quiesced pass will rebuild it"
 fi
+require_pinned_storage
+resecure_work_roots
 
-rsync -aHAX --numeric-ids --delete --delete-excluded \
-    --exclude='/incoming/***' \
-    --exclude='/tmp/***' \
-    --exclude='/files/incoming/***' \
-    --exclude='*.db' \
-    --exclude='*.db-wal' \
-    --exclude='*.db-shm' \
-    "${LINK_DEST[@]}" \
-    "$SOURCE/" "$WORK/data/"
+log "copying the initial recovery configuration pass"
+require_pinned_storage
+validate_work
+[ -d /srv/compose/photo-portal ] && [ ! -L /srv/compose/photo-portal ] ||
+    fail "recovery configuration source is unsafe"
+python3 "$PATH_SAFETY_TOOL" pinned-sync-tree \
+    --source /srv/compose/photo-portal \
+    --work-path "$WORK" --work-fd "$WORK_ROOT_FD" \
+    --work-identity "$WORK_ROOT_IDENTITY" \
+    --relative config/photo-portal --profile all >/dev/null ||
+    fail "configuration target could not be copied safely"
+require_pinned_storage
+resecure_work_roots
 
-log "creating transactionally consistent SQLite copies"
-SOURCE="$SOURCE" DATABASE_DEST="$WORK/databases" python3 - <<'PY'
-from pathlib import Path
-import os
-import sqlite3
-
-source = Path(os.environ["SOURCE"])
-destination = Path(os.environ["DATABASE_DEST"])
-databases = sorted(source.rglob("*.db"))
-if not databases:
-    raise SystemExit("no SQLite databases found")
-
-for database in databases:
-    relative = database.relative_to(source)
-    output = destination / relative
-    output.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(f"file:{database}?mode=ro", uri=True, timeout=30) as src:
-        with sqlite3.connect(output) as dst:
-            src.backup(dst)
-            result = dst.execute("PRAGMA quick_check").fetchone()
-            if not result or result[0] != "ok":
-                raise RuntimeError(f"quick_check failed for {relative}")
-
-(destination / "DATABASE_COUNT").write_text(f"{len(databases)}\n", encoding="ascii")
-PY
-
-log "copying recovery configuration"
-rsync -aHAX --numeric-ids --delete /srv/compose/photo-portal/ "$WORK/config/photo-portal/"
-install -D -m 0600 /etc/fstab "$WORK/config/host/etc/fstab"
-mkdir -p \
-    "$WORK/config/host/systemd" \
-    "$WORK/config/host/usr-local-sbin" \
-    "$WORK/config/host/etc/ssh/sshd_config.d"
-if [ -d /etc/ssh/sshd_config.d ]; then
-    rsync -a /etc/ssh/sshd_config.d/ "$WORK/config/host/etc/ssh/sshd_config.d/"
-fi
-find /etc/systemd/system -maxdepth 1 -type f -name 'david-pi*' -exec cp -a {} "$WORK/config/host/systemd/" \; 2>/dev/null || true
-find /usr/local/sbin -maxdepth 1 -type f -name 'david-pi*' -exec cp -a {} "$WORK/config/host/usr-local-sbin/" \; 2>/dev/null || true
-
-cat >"$WORK/MANIFEST.txt" <<EOF
-snapshot=$STAMP
-source_device=$(findmnt -no SOURCE -T "$SOURCE")
-source_uuid=$(findmnt -no UUID -T "$SOURCE")
-backup_device=$(findmnt -no SOURCE -T "$DESTINATION")
-backup_uuid=$(findmnt -no UUID -T "$DESTINATION")
-database_count=$(cat "$WORK/databases/DATABASE_COUNT")
-portal_image=$(docker inspect -f '{{.Config.Image}}' "$PORTAL_CONTAINER" 2>/dev/null || echo unavailable)
-EOF
-
-sync -f "$WORK"
-mv "$WORK" "$FINAL"
-ln -sfn "$STAMP" "$LATEST.new"
-mv -Tf "$LATEST.new" "$LATEST"
-
-mapfile -t old_snapshots < <(
-    find "$SNAPSHOTS" -mindepth 1 -maxdepth 1 -type d -name '20*T*Z' -printf '%f\n' |
-        sort -r | tail -n "+$((KEEP_SNAPSHOTS + 1))"
-)
-for snapshot in "${old_snapshots[@]}"; do
-    rm -rf --one-file-system "$SNAPSHOTS/$snapshot"
+log "quiescing every known writer for a consistent final pass"
+[ -x "$QUIESCENCE_HELPER" ] && [ ! -L "$QUIESCENCE_HELPER" ] ||
+    fail "durable writer recovery helper is missing or unsafe"
+QUIESCE_STARTED_EPOCH=$(date +%s)
+for container in "${WRITER_CONTAINERS[@]}"; do
+    if docker inspect "$container" >/dev/null 2>&1 &&
+       [ "$(docker inspect -f '{{.State.Running}}' "$container")" = true ]; then
+        RUNNING_WRITERS+=("$container")
+        container_id=$(docker inspect -f '{{.Id}}' "$container")
+        "$QUIESCENCE_HELPER" record --container "$container" --container-id "$container_id" ||
+            fail "could not durably journal writer $container"
+    fi
+done
+for container in "${RUNNING_WRITERS[@]}"; do
+    require_pinned_storage
+    docker stop --time 45 "$container" >/dev/null || fail "could not stop writer $container"
+done
+for container in "${RUNNING_WRITERS[@]}"; do
+    [ "$(docker inspect -f '{{.State.Running}}' "$container")" = false ] ||
+        fail "writer remained active after stop: $container"
 done
 
-restart_portal
-PORTAL_WAS_RUNNING=0
+require_pinned_storage
+validate_work
+python3 "$PATH_SAFETY_TOOL" pinned-sync-tree \
+    --source "$SOURCE" --source-fd "$SOURCE_ROOT_FD" \
+    --source-identity "$SOURCE_ROOT_IDENTITY" \
+    --work-path "$WORK" --work-fd "$WORK_ROOT_FD" \
+    --work-identity "$WORK_ROOT_IDENTITY" \
+    --relative data --profile data >/dev/null ||
+    fail "quiesced data could not be copied safely"
+require_pinned_storage
+resecure_work_roots
 
-cat >"$DESTINATION/last-success.json.tmp" <<EOF
-{"schema_version":1,"completed_at":"$(date -u +%FT%TZ)","snapshot":"$STAMP","database_count":$(cat "$FINAL/databases/DATABASE_COUNT"),"state":"healthy"}
-EOF
-chmod 0600 "$DESTINATION/last-success.json.tmp"
-mv "$DESTINATION/last-success.json.tmp" "$DESTINATION/last-success.json"
-sync -f "$DESTINATION"
+log "creating transactionally consistent SQLite copies"
+require_pinned_storage
+validate_work
+python3 "$PATH_SAFETY_TOOL" pinned-copy-databases \
+    --source "$SOURCE" --source-fd "$SOURCE_ROOT_FD" \
+    --source-identity "$SOURCE_ROOT_IDENTITY" \
+    --work-path "$WORK" --work-fd "$WORK_ROOT_FD" \
+    --work-identity "$WORK_ROOT_IDENTITY" >/dev/null ||
+    fail "database target could not be rebuilt safely"
+
+log "copying recovery configuration"
+require_pinned_storage
+validate_work
+[ -d /srv/compose/photo-portal ] && [ ! -L /srv/compose/photo-portal ] ||
+    fail "recovery configuration source is unsafe"
+python3 "$PATH_SAFETY_TOOL" pinned-sync-tree \
+    --source /srv/compose/photo-portal \
+    --work-path "$WORK" --work-fd "$WORK_ROOT_FD" \
+    --work-identity "$WORK_ROOT_IDENTITY" \
+    --relative config/photo-portal --profile all >/dev/null ||
+    fail "configuration target could not be copied safely"
+require_pinned_storage
+resecure_work_roots
+require_pinned_storage
+validate_work
+[ -d /etc/ssh/sshd_config.d ] && [ ! -L /etc/ssh/sshd_config.d ] ||
+    fail "SSH recovery configuration source is unsafe"
+python3 "$PATH_SAFETY_TOOL" pinned-sync-tree \
+    --source /etc/ssh/sshd_config.d \
+    --work-path "$WORK" --work-fd "$WORK_ROOT_FD" \
+    --work-identity "$WORK_ROOT_IDENTITY" \
+    --relative config/host/etc/ssh/sshd_config.d --profile all >/dev/null ||
+    fail "SSH recovery configuration could not be copied safely"
+require_pinned_storage
+validate_work
+python3 "$PATH_SAFETY_TOOL" pinned-copy-file \
+    --source /etc/fstab \
+    --work-path "$WORK" --work-fd "$WORK_ROOT_FD" \
+    --work-identity "$WORK_ROOT_IDENTITY" \
+    --relative config/host/etc/fstab >/dev/null ||
+    fail "fstab recovery configuration could not be copied safely"
+require_pinned_storage
+validate_work
+python3 "$PATH_SAFETY_TOOL" pinned-sync-tree \
+    --source /etc/systemd/system \
+    --work-path "$WORK" --work-fd "$WORK_ROOT_FD" \
+    --work-identity "$WORK_ROOT_IDENTITY" \
+    --relative config/host/systemd --profile top-files \
+    --basename-pattern 'david-pi*' >/dev/null ||
+    fail "systemd recovery configuration could not be copied safely"
+require_pinned_storage
+validate_work
+python3 "$PATH_SAFETY_TOOL" pinned-sync-tree \
+    --source /usr/local/sbin \
+    --work-path "$WORK" --work-fd "$WORK_ROOT_FD" \
+    --work-identity "$WORK_ROOT_IDENTITY" \
+    --relative config/host/usr-local-sbin --profile top-files \
+    --basename-pattern 'david-pi*' >/dev/null ||
+    fail "host recovery tools could not be copied safely"
+
+PORTAL_CONTAINER=family-photo-portal
+PORTAL_IMAGE=$(docker inspect -f '{{.Config.Image}}' "$PORTAL_CONTAINER") ||
+    fail "could not identify the portal image"
+COMPLETED_AT=$(date -u +%FT%TZ)
+if ! restart_writers; then
+    fail "one or more application writers did not restart"
+fi
+RUNNING_WRITERS=()
+QUIESCENCE_SECONDS=$(( $(date +%s) - QUIESCE_STARTED_EPOCH ))
+[ "$QUIESCENCE_SECONDS" -ge 0 ] && [ "$QUIESCENCE_SECONDS" -le "$MAX_QUIESCENCE_SECONDS" ] ||
+    fail "writer quiescence exceeded the approved 30-minute window"
+
+log "authenticating the coherent snapshot while application writers are online"
+require_pinned_storage
+validate_work
+require_pinned_storage
+python3 "$MANIFEST_TOOL" create \
+    --snapshot "$WORK" \
+    --snapshot-fd "$WORK_ROOT_FD" \
+    --output "$WORK/MANIFEST.json" \
+    --signing-key-file "$MANIFEST_SIGNING_KEY_FILE" \
+    --snapshot-id "$STAMP" \
+    --started-at "$STARTED_AT" \
+    --completed-at "$COMPLETED_AT" \
+    --source-device "$SOURCE_DEVICE" \
+    --source-uuid "$SOURCE_UUID" \
+    --source-st-dev "$SOURCE_ST_DEV" \
+    --backup-device "$BACKUP_DEVICE" \
+    --backup-uuid "$BACKUP_UUID" \
+    --backup-st-dev "$BACKUP_ST_DEV" \
+    --portal-image "$PORTAL_IMAGE" >/dev/null
+
+MANIFEST_FACT_OUTPUT=$(python3 - "$WORK_ROOT_FD" <<'PY'
+import json
+import sys
+manifest = json.load(open(f"/proc/self/fd/{sys.argv[1]}/MANIFEST.json", encoding="utf-8"))
+print(manifest["integrity"]["payload_sha256"])
+print(len(manifest["databases"]))
+PY
+) || fail "could not read the pinned snapshot manifest"
+mapfile -t MANIFEST_FACTS <<<"$MANIFEST_FACT_OUTPUT"
+[ "${#MANIFEST_FACTS[@]}" -eq 2 ] || fail "snapshot manifest facts are incomplete"
+MANIFEST_DIGEST=${MANIFEST_FACTS[0]}
+DATABASE_COUNT=${MANIFEST_FACTS[1]}
+
+require_pinned_storage
+printf '%s\n' \
+    "snapshot=$STAMP" \
+    "source_device=$SOURCE_DEVICE" \
+    "source_uuid=$SOURCE_UUID" \
+    "source_st_dev=$SOURCE_ST_DEV" \
+    "backup_device=$BACKUP_DEVICE" \
+    "backup_uuid=$BACKUP_UUID" \
+    "backup_st_dev=$BACKUP_ST_DEV" \
+    "database_count=$DATABASE_COUNT" \
+    "portal_image=$PORTAL_IMAGE" \
+    "manifest_schema=4" |
+    python3 "$PATH_SAFETY_TOOL" pinned-write-work \
+        --work-path "$WORK" --work-fd "$WORK_ROOT_FD" \
+        --work-identity "$WORK_ROOT_IDENTITY" \
+        --name MANIFEST.txt >/dev/null || fail "could not safely write manifest summary"
+
+require_pinned_storage
+validate_work
+python3 "$PATH_SAFETY_TOOL" pinned-fsync \
+    --path "$WORK" --fd "$WORK_ROOT_FD" --identity "$WORK_ROOT_IDENTITY" >/dev/null ||
+    fail "could not flush the pinned working snapshot"
+require_pinned_storage
+python3 "$PATH_SAFETY_TOOL" pinned-finalize \
+    --destination "$DESTINATION" --destination-fd "$BACKUP_ROOT_FD" \
+    --destination-identity "$BACKUP_ROOT_IDENTITY" \
+    --work-path "$WORK" --work-fd "$WORK_ROOT_FD" \
+    --work-identity "$WORK_ROOT_IDENTITY" --snapshot-id "$STAMP" >/dev/null ||
+    fail "could not atomically finalize the pinned snapshot"
+python3 "$PATH_SAFETY_TOOL" pinned-validate-final \
+    --destination "$DESTINATION" --destination-fd "$BACKUP_ROOT_FD" \
+    --destination-identity "$BACKUP_ROOT_IDENTITY" \
+    --final-path "$FINAL" --snapshot-fd "$WORK_ROOT_FD" \
+    --snapshot-identity "$WORK_ROOT_IDENTITY" --snapshot-id "$STAMP" >/dev/null ||
+    fail "published snapshot no longer matches its retained descriptor"
+python3 "$MANIFEST_TOOL" verify \
+    --snapshot "$FINAL" --manifest "$FINAL/MANIFEST.json" \
+    --snapshot-fd "$WORK_ROOT_FD" \
+    --signing-key-file "$MANIFEST_SIGNING_KEY_FILE" >/dev/null ||
+    fail "published snapshot failed signed verification"
+python3 "$PATH_SAFETY_TOOL" pinned-validate-final \
+    --destination "$DESTINATION" --destination-fd "$BACKUP_ROOT_FD" \
+    --destination-identity "$BACKUP_ROOT_IDENTITY" \
+    --final-path "$FINAL" --snapshot-fd "$WORK_ROOT_FD" \
+    --snapshot-identity "$WORK_ROOT_IDENTITY" --snapshot-id "$STAMP" >/dev/null ||
+    fail "verified snapshot name was replaced before latest publication"
+python3 "$PATH_SAFETY_TOOL" pinned-publish-latest \
+    --destination "$DESTINATION" --destination-fd "$BACKUP_ROOT_FD" \
+    --destination-identity "$BACKUP_ROOT_IDENTITY" \
+    --final-path "$FINAL" --snapshot-fd "$WORK_ROOT_FD" \
+    --snapshot-identity "$WORK_ROOT_IDENTITY" \
+    --snapshot-id "$STAMP" >/dev/null || fail "could not safely publish latest"
+
+log "snapshot pruning remains forcibly disabled"
+require_pinned_storage
+printf '%s\n' \
+    "{\"schema_version\":3,\"completed_at\":\"$(date -u +%FT%TZ)\",\"snapshot\":\"$STAMP\",\"database_count\":$DATABASE_COUNT,\"manifest_sha256\":\"$MANIFEST_DIGEST\",\"writers_quiesced\":true,\"writer_quiescence_seconds\":$QUIESCENCE_SECONDS,\"pruning_enabled\":false,\"state\":\"healthy\"}" |
+    python3 "$PATH_SAFETY_TOOL" pinned-write-destination \
+        --destination "$DESTINATION" --destination-fd "$BACKUP_ROOT_FD" \
+        --destination-identity "$BACKUP_ROOT_IDENTITY" \
+        --name last-success.json >/dev/null ||
+    fail "could not safely write success status"
+write_attempt_status healthy "signed_snapshot_complete"
+require_pinned_storage
+python3 "$PATH_SAFETY_TOOL" pinned-fsync \
+    --path "$DESTINATION" --fd "$BACKUP_ROOT_FD" \
+    --identity "$BACKUP_ROOT_IDENTITY" >/dev/null ||
+    fail "could not flush the pinned backup root"
 
 log "snapshot $STAMP completed"

@@ -3,7 +3,10 @@ set -Eeuo pipefail
 
 # The release workflow replaces this token in the published installer asset.
 REPOSITORY="${DAVID_PI_REPOSITORY:-__GITHUB_REPOSITORY__}"
-RELEASE_VERSION="${DAVID_PI_VERSION:-latest}"
+RENDERED_VERSION="__RELEASE_VERSION__"
+[[ "$RENDERED_VERSION" != *'__'* ]] || RENDERED_VERSION=latest
+RELEASE_VERSION="${DAVID_PI_VERSION:-$RENDERED_VERSION}"
+MODE=setup
 TEST_MODE="${DAVID_PI_BOOTSTRAP_TEST_MODE:-0}"
 WORK=''
 
@@ -11,6 +14,16 @@ say() { printf '%s\n' "$*"; }
 fail() { printf 'David-Pi bootstrap: %s\n' "$*" >&2; exit 1; }
 cleanup() { [[ -z "$WORK" ]] || rm -rf -- "$WORK"; }
 trap cleanup EXIT INT TERM HUP
+
+case "${1:-}" in
+  '') ;;
+  --prepare-recovery) MODE=prepare-recovery; shift ;;
+  *) fail "unknown option; use --prepare-recovery for a replacement machine" ;;
+esac
+(( $# == 0 )) || fail "unexpected installer arguments"
+CANONICAL_VERSION='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-beta\.[1-9][0-9]*)?$'
+[[ "$RELEASE_VERSION" == latest || "$RELEASE_VERSION" =~ $CANONICAL_VERSION ]] || fail "invalid DAVID_PI_VERSION; select an exact stable or beta version"
+
 
 [[ "$REPOSITORY" != *'__'* ]] || fail "this source template is not a rendered release asset; set DAVID_PI_REPOSITORY=OWNER/david-pi or download install.sh from a release"
 [[ "$REPOSITORY" =~ ^[A-Za-z0-9_.-]+/david-pi$ ]] || fail "invalid GitHub repository name"
@@ -26,15 +39,15 @@ if [[ "$TEST_MODE" != 1 ]]; then
   # shellcheck disable=SC1091
   source /etc/os-release
   case "${ID:-}:${VERSION_ID:-}" in
-    debian:12|debian:13|ubuntu:22.04|ubuntu:24.04) ;;
-    *) fail "supported hosts are Debian 12/13 and Ubuntu 22.04/24.04" ;;
+    debian:13|raspbian:13|ubuntu:24.04) ;;
+    *) fail "supported hosts are Debian 13 or Ubuntu 24.04 AMD64 and Raspberry Pi OS Debian 13 ARM64" ;;
   esac
   case "$(uname -m)" in x86_64|aarch64) ;; *) fail "only amd64 and arm64 are supported" ;; esac
   memory_kib="$(awk '/^MemTotal:/{print $2}' /proc/meminfo)"
   (( memory_kib >= 3670016 )) || fail "at least 3.5 GiB RAM is required"
   free_kib="$(df -Pk / | awk 'NR==2{print $4}')"
   (( free_kib >= 8388608 )) || fail "at least 8 GiB free space is required on the OS filesystem"
-  for command in curl sha256sum tar awk sed find; do
+  for command in curl sha256sum tar awk sed find python3; do
     command -v "$command" >/dev/null || fail "required command is missing: $command"
   done
 fi
@@ -44,7 +57,7 @@ if [[ -n "${DAVID_PI_DOWNLOAD_BASE:-}" ]]; then
   [[ "$DOWNLOAD_BASE" == https://* || "$TEST_MODE" == 1 ]] || fail "custom download base must use HTTPS"
 elif [[ "$RELEASE_VERSION" == latest ]]; then
   DOWNLOAD_BASE="https://github.com/$REPOSITORY/releases/latest/download"
-elif [[ "$RELEASE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-.][A-Za-z0-9_.-]+)?$ ]]; then
+elif [[ "$RELEASE_VERSION" =~ $CANONICAL_VERSION ]]; then
   DOWNLOAD_BASE="https://github.com/$REPOSITORY/releases/download/v$RELEASE_VERSION"
 else
   fail "invalid DAVID_PI_VERSION"
@@ -55,7 +68,7 @@ chmod 0700 "$WORK"
 CURL=(curl --fail --location --silent --show-error --proto '=https' --tlsv1.2 --connect-timeout 15 --max-time 300)
 if [[ "$TEST_MODE" == 1 ]]; then CURL=(curl --fail --location --silent --show-error --connect-timeout 5 --max-time 30); fi
 
-say "Downloading release metadata from GitHub..."
+say "Downloading release metadata..."
 "${CURL[@]}" "$DOWNLOAD_BASE/release-manifest.txt" -o "$WORK/release-manifest.txt"
 (( $(wc -c < "$WORK/release-manifest.txt") <= 4096 )) || fail "release manifest is unexpectedly large"
 
@@ -68,7 +81,8 @@ VERSION="$(manifest_value VERSION)"
 ARCHIVE="$(manifest_value ARCHIVE)"
 ARCHIVE_SHA256="$(manifest_value ARCHIVE_SHA256)"
 IMAGE="$(manifest_value IMAGE)"
-[[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-.][A-Za-z0-9_.-]+)?$ ]] || fail "manifest has an invalid version"
+[[ "$VERSION" =~ $CANONICAL_VERSION ]] || fail "manifest has an invalid version"
+[[ "$RELEASE_VERSION" != latest || "$VERSION" != *-beta.* ]] || fail "latest cannot select a testing release; choose its exact published version explicitly"
 [[ "$ARCHIVE" == "david-pi-$VERSION.tar.gz" ]] || fail "manifest has an invalid archive name"
 [[ "$ARCHIVE_SHA256" =~ ^[0-9a-f]{64}$ ]] || fail "manifest has an invalid archive checksum"
 [[ "$IMAGE" =~ ^ghcr\.io/[a-z0-9_.-]+/david-pi@sha256:[0-9a-f]{64}$ ]] || fail "manifest image is not an immutable GHCR digest"
@@ -87,7 +101,20 @@ while IFS= read -r member; do
 done < <(tar -tzf "$WORK/$ARCHIVE")
 
 mkdir -m 0700 "$WORK/extracted"
-tar -xzf "$WORK/$ARCHIVE" -C "$WORK/extracted" --no-same-owner --no-same-permissions
+python3 - "$WORK/$ARCHIVE" "$WORK/extracted" <<'PYARCHIVE'
+import pathlib,sys,tarfile
+with tarfile.open(sys.argv[1], 'r:gz') as bundle:
+    members=bundle.getmembers()
+    seen=set()
+    if len(members)>100000 or sum(m.size for m in members)>4*1024**3:
+        raise SystemExit('Release archive is too large')
+    for member in members:
+        path=pathlib.PurePosixPath(member.name)
+        if path.is_absolute() or '..' in path.parts or not (member.isfile() or member.isdir()) or member.name in seen:
+            raise SystemExit('Unsafe release archive member')
+        seen.add(member.name)
+    bundle.extractall(sys.argv[2],members=members,filter='data')
+PYARCHIVE
 ROOT="$WORK/extracted/david-pi-$VERSION"
 [[ -x "$ROOT/david-pi" && "$(tr -d '[:space:]' < "$ROOT/VERSION")" == "$VERSION" ]] || fail "release contents are incomplete"
 
@@ -96,6 +123,14 @@ say "Container image pinned to: $IMAGE"
 if [[ "${DAVID_PI_BOOTSTRAP_VERIFY_ONLY:-0}" == 1 ]]; then
   say "Verification-only mode complete; setup was not started."
   exit 0
+fi
+
+# A bootstrap is for a new or unclaimed machine. Never replace an installed
+# household's CLI before the snapshot-protected updater/repair decides its work.
+EXISTING_CONFIG=/etc/david-pi/installation.json
+if [[ "$TEST_MODE" == 1 ]]; then EXISTING_CONFIG="${DAVID_PI_BOOTSTRAP_EXISTING_CONFIG:-$WORK/no-existing-installation}"; fi
+if [[ -f "$EXISTING_CONFIG" ]]; then
+  fail "this home is already installed; use sudo david-pi update (or an explicitly selected beta update), or sudo david-pi setup to resume services. Existing host code and CLI were preserved"
 fi
 
 # Keep a verified copy of the installer available if guided setup deliberately
@@ -117,10 +152,26 @@ cp -a -- "$ROOT" "$BOOTSTRAP_STAGE"
 rm -rf -- "$BOOTSTRAP_ROOT"
 mv -- "$BOOTSTRAP_STAGE" "$BOOTSTRAP_ROOT"
 chmod 0755 "$BOOTSTRAP_ROOT/david-pi"
+# Preserve the verified selection for clean recovery and interrupted setup.
+python3 - "$WORK/release-manifest.txt" "$BOOTSTRAP_ROOT/verified-release.json" "$REPOSITORY" "$RELEASE_VERSION" <<'PYRECEIPT'
+import json,os,pathlib,sys
+path=pathlib.Path(sys.argv[2])
+path.write_text(json.dumps({"manifest":pathlib.Path(sys.argv[1]).read_text(),"repository":sys.argv[3],"selected_version":sys.argv[4]})+"\n")
+os.chmod(path,0o600)
+PYRECEIPT
 ln -sfn -- "$BOOTSTRAP_ROOT/david-pi" "$CLI_LINK"
 
 export DAVID_PI_IMAGE_OVERRIDE="$IMAGE"
-"$BOOTSTRAP_ROOT/david-pi" setup
+export DAVID_PI_REPOSITORY="$REPOSITORY"
+# A piped bootstrap uses standard input for shell source. Interactive setup
+# must read the person's terminal instead of consuming that source or its EOF.
+if [[ -t 0 ]]; then
+  "$BOOTSTRAP_ROOT/david-pi" "$MODE"
+elif { true </dev/tty; } 2>/dev/null; then
+  "$BOOTSTRAP_ROOT/david-pi" "$MODE" </dev/tty
+else
+  fail "guided setup needs an interactive terminal. Open a terminal on the server (or an interactive SSH session) and run the verified installer there."
+fi
 
 # On success dp_install_application has installed the final CLI and repointed
 # the link.  Remove only this versioned bootstrap copy; failed or interrupted

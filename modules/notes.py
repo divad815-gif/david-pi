@@ -1,12 +1,18 @@
+import hashlib
 import json
 import sqlite3
 import uuid
-from datetime import datetime, timedelta, timezone
 
 from flask import Blueprint, jsonify, render_template, request
 
+from .content_ownership import (
+    actor_for_identity,
+    audit_mutation,
+    authorize,
+    row_is_visible,
+)
 from .identity import current_device, require_profile
-from .platform import PLATFORM_DATA, connect, migrate, utcnow
+from .platform import PLATFORM_DATA, connect, initialize_data_foundation, migrate, utcnow
 
 
 DB_PATH = PLATFORM_DATA / "notes.db"
@@ -44,15 +50,17 @@ def initialize_notes(connection):
             }:
                 raise
     connection.execute("CREATE INDEX IF NOT EXISTS notes_visibility_idx ON notes(visibility, owner_id)")
+    initialize_data_foundation(connection)
 
 
 migrate(DB_PATH, initialize_notes)
 
 
 def visible_clause(identity):
-    if identity["owner_id"]:
-        return "(visibility = 'shared' OR owner_id = ?)", [identity["owner_id"]]
-    return "visibility = 'shared'", []
+    actor = actor_for_identity(identity)
+    if actor.principal_id and actor.role in {"admin", "household"}:
+        return "(visibility = 'shared' OR owner_id = ?)", [actor.principal_id]
+    return "0 = 1", []
 
 
 def clean_tags(value):
@@ -83,19 +91,37 @@ def clean_checklist(value):
 
 def note_json(row, identity=None):
     item = dict(row)
-    # Notes created before the household author picker used the neutral
-    # "home" owner. Keep them visible and present them as David's existing
-    # notes rather than creating an unexplained third category.
-    item["owner_display"] = item.get("owner_name") or (
-        "Diana" if item.get("owner") == "diana" else "David"
-    )
+    item["owner_display"] = item.get("owner_name") or "Legacy (unclaimed)"
     item["is_mine"] = bool(
         identity and identity["owner_id"] and item.get("owner_id") == identity["owner_id"]
     )
+    item["can_edit"] = item["is_mine"]
+    item["ownership_status"] = "owned" if item.get("owner_id") else "legacy_unclaimed"
     item["pinned"] = bool(item["pinned"])
     item["archived"] = bool(item["archived"])
     item["tags"] = json.loads(item.pop("tags_json") or "[]")
     item["checklist"] = json.loads(item.pop("checklist_json") or "[]")
+    item.pop("owner", None)
+    item.pop("owner_id", None)
+    item.pop("owner_name", None)
+    return item
+
+
+def note_summary_json(row, identity=None):
+    """Return the list-card shape without sending full saved note content."""
+    item = note_json(row, identity)
+    checklist = item.pop("checklist")
+    body = item.pop("body")
+    if item["note_type"] == "checklist":
+        total = len(checklist)
+        done = sum(bool(entry.get("done")) for entry in checklist)
+        item["summary"] = f"{done} of {total} complete" if total else "Empty checklist"
+        item["checklist_total"] = total
+        item["checklist_done"] = done
+    else:
+        item["summary"] = " ".join(body.split())[:240] or "Empty note"
+        item["checklist_total"] = 0
+        item["checklist_done"] = 0
     return item
 
 
@@ -106,18 +132,47 @@ def visible_note(connection, note_id, identity):
     ).fetchone()
 
 
+def _note_for_write(connection, note_id, actor):
+    row = connection.execute("SELECT * FROM notes WHERE id = ?", (note_id,)).fetchone()
+    if row is None or not row_is_visible(row, actor):
+        return None, (jsonify(error="Note not found."), 404)
+    return row, None
+
+
+def _expected_version(data):
+    try:
+        version = int(data.get("version"))
+    except (TypeError, ValueError):
+        return None
+    return version if version > 0 else None
+
+
 @notes_bp.get("/notes")
 @require_profile(api=False)
 def notes_page():
-    return render_template("notes.html")
+    owner = current_device().get("owner_id") or ""
+    return render_template("notes.html", notes_draft_scope=hashlib.sha256(
+        ("notes-drafts:" + owner).encode("utf-8")
+    ).hexdigest())
 
 
 @notes_bp.get("/api/notes")
 @require_profile()
 def list_notes():
     identity = current_device()
+    actor = actor_for_identity(identity)
+    if not actor.principal_id or actor.role not in {"admin", "household"}:
+        return jsonify(error="Open David-Pi through an approved private Tailscale account."), 403
     view = request.args.get("view", "all")
     query = " ".join(request.args.get("q", "").split()).lower()[:120]
+    try:
+        limit = int(request.args.get("limit", "40"))
+        offset = int(request.args.get("offset", "0"))
+        if not 1 <= limit <= 100 or not 0 <= offset <= 1000000:
+            raise ValueError
+    except (TypeError, ValueError):
+        return jsonify(error="Choose a valid notes page."), 400
+    export = request.args.get("export") == "1"
     if view in ("all", "shared"):
         conditions, parameters = ["visibility = 'shared'"], []
     elif view == "mine":
@@ -140,11 +195,18 @@ def list_notes():
         pattern = f"%{query}%"
         parameters.extend([pattern, pattern, pattern])
     with connect(DB_PATH) as connection:
+        total = connection.execute(
+            f"SELECT COUNT(*) FROM notes WHERE {' AND '.join(conditions)}", parameters
+        ).fetchone()[0]
         rows = connection.execute(
-            f"SELECT * FROM notes WHERE {' AND '.join(conditions)} ORDER BY pinned DESC, updated_at DESC",
-            parameters,
+            f"SELECT * FROM notes WHERE {' AND '.join(conditions)} ORDER BY pinned DESC, updated_at DESC, id DESC"
+            + ("" if export else " LIMIT ? OFFSET ?"),
+            parameters if export else [*parameters, limit, offset],
         ).fetchall()
-    return jsonify(notes=[note_json(row, identity) for row in rows], current_user=identity["name"])
+    notes = [(note_json if export else note_summary_json)(row, identity) for row in rows]
+    return jsonify(notes=notes, count=total, total=total, offset=offset,
+                   next_offset=offset + len(notes), has_more=not export and offset + len(notes) < total,
+                   current_user=identity["name"])
 
 
 @notes_bp.post("/api/notes")
@@ -152,21 +214,30 @@ def list_notes():
 def create_note():
     data = request.get_json(silent=True) or {}
     identity = current_device()
-    if not identity["owner_id"]:
-        return jsonify(error="Open David-Pi through its private Tailscale address."), 401
+    actor = actor_for_identity(identity)
+    if not actor.principal_id or actor.role not in {"admin", "household"}:
+        return jsonify(error="Open David-Pi through an approved private Tailscale account."), 403
     visibility = str(data.get("visibility", "shared")).lower()
     if visibility not in ("shared", "private"):
         return jsonify(error="Choose Shared or Only me."), 400
     note_id = uuid.uuid4().hex
     now = utcnow()
     with connect(DB_PATH) as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        decision = authorize("note.create", actor)
+        if not decision.allowed:
+            return jsonify(error="Open David-Pi through an approved private Tailscale account."), 403
         connection.execute(
             """INSERT INTO notes
                (id, visibility, owner, owner_id, owner_name, created_at, updated_at)
                VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            (note_id, visibility, "home", identity["owner_id"], identity["name"], now, now),
+            (note_id, visibility, "home", actor.principal_id, identity["name"], now, now),
         )
         row = connection.execute("SELECT * FROM notes WHERE id = ?", (note_id,)).fetchone()
+        audit_mutation(
+            connection, actor=actor, domain="note", object_id=note_id,
+            action="create", before=None, after=row,
+        )
     return jsonify(note=note_json(row, identity)), 201
 
 
@@ -186,9 +257,8 @@ def get_note(note_id):
 def save_note(note_id):
     data = request.get_json(silent=True) or {}
     identity = current_device()
-    try:
-        expected_version = int(data.get("version"))
-    except (TypeError, ValueError):
+    expected_version = _expected_version(data)
+    if expected_version is None:
         return jsonify(error="Reload this note before saving."), 400
     note_type = data.get("note_type", "text")
     visibility = str(data.get("visibility", "shared")).lower()
@@ -196,27 +266,33 @@ def save_note(note_id):
         return jsonify(error="Choose Shared or Only me."), 400
     if note_type not in ("text", "checklist"):
         return jsonify(error="That note setting is not supported."), 400
+    actor = actor_for_identity(identity)
     with connect(DB_PATH) as connection:
-        row = visible_note(connection, note_id, identity)
-        if not row:
-            return jsonify(error="Note not found."), 404
-        owner_id, owner_name = row["owner_id"], row["owner_name"]
-        if visibility == "private":
-            if not identity["owner_id"]:
-                return jsonify(error="Open David-Pi through its private Tailscale address."), 401
-            if owner_id and owner_id != identity["owner_id"]:
-                return jsonify(error="Only the note owner can make this note private."), 403
-            owner_id, owner_name = identity["owner_id"], identity["name"]
+        connection.execute("BEGIN IMMEDIATE")
+        row, error = _note_for_write(connection, note_id, actor)
+        if error:
+            return error
+        decision = authorize("note.update", actor, row)
+        if not decision.allowed:
+            return jsonify(error="This shared note is read-only because you are not its owner."), 403
+        if row["deleted_at"]:
+            return jsonify(error="Restore this note before editing it."), 409
+        if row["version"] != expected_version:
+            return jsonify(
+                error="This note changed on another device. Your text was not overwritten.",
+                conflict=True,
+                latest=note_json(row, identity),
+            ), 409
         result = connection.execute(
             """UPDATE notes SET title = ?, body = ?, checklist_json = ?, note_type = ?,
-               visibility = ?, owner_id = ?, owner_name = ?, tags_json = ?, updated_at = ?, version = version + 1
-               WHERE id = ? AND version = ?""",
+               visibility = ?, tags_json = ?, updated_at = ?, version = version + 1
+               WHERE id = ? AND owner_id = ? AND version = ? AND deleted_at IS NULL""",
             (
                 str(data.get("title", "")).replace("\x00", "")[:200],
                 str(data.get("body", "")).replace("\x00", "")[:100000],
                 json.dumps(clean_checklist(data.get("checklist", []))),
-                note_type, visibility, owner_id, owner_name, json.dumps(clean_tags(data.get("tags", []))),
-                utcnow(), note_id, expected_version,
+                note_type, visibility, json.dumps(clean_tags(data.get("tags", []))),
+                utcnow(), note_id, actor.principal_id, expected_version,
             ),
         )
         if not result.rowcount:
@@ -224,6 +300,10 @@ def save_note(note_id):
             return jsonify(error="This note changed on another device. Your text was not overwritten.", conflict=True,
                            latest=note_json(latest, identity)), 409
         saved = visible_note(connection, note_id, identity)
+        audit_mutation(
+            connection, actor=actor, domain="note", object_id=note_id,
+            action="update", before=row, after=saved,
+        )
     return jsonify(ok=True, note=note_json(saved, identity))
 
 
@@ -240,31 +320,67 @@ def note_state(note_id):
     }
     if action not in assignments:
         return jsonify(error="Unknown note action."), 400
+    expected_version = _expected_version(data)
+    if expected_version is None:
+        return jsonify(error="Reload this note before changing it."), 400
     column, value = assignments[action]
+    actor = actor_for_identity(identity)
     with connect(DB_PATH) as connection:
-        if not visible_note(connection, note_id, identity):
-            return jsonify(error="Note not found."), 404
-        connection.execute(f"UPDATE notes SET {column} = ?, updated_at = ?, version = version + 1 WHERE id = ?",
-                           (value, utcnow(), note_id))
-    return jsonify(ok=True)
+        connection.execute("BEGIN IMMEDIATE")
+        row, error = _note_for_write(connection, note_id, actor)
+        if error:
+            return error
+        decision = authorize("note.state.update", actor, row, action=action)
+        if not decision.allowed:
+            return jsonify(error="This shared note is read-only because you are not its owner."), 403
+        if row["version"] != expected_version:
+            return jsonify(error="This note changed elsewhere. Reload it before continuing.", conflict=True), 409
+        if action == "restore" and not row["deleted_at"]:
+            return jsonify(error="This note is not in Recently Deleted."), 409
+        if action != "restore" and row["deleted_at"]:
+            return jsonify(error="Restore this note before changing it."), 409
+        result = connection.execute(
+            f"UPDATE notes SET {column} = ?, updated_at = ?, version = version + 1 "
+            "WHERE id = ? AND owner_id = ? AND version = ?",
+            (value, utcnow(), note_id, actor.principal_id, expected_version),
+        )
+        if not result.rowcount:
+            return jsonify(error="This note changed elsewhere. Reload it before continuing.", conflict=True), 409
+        saved = connection.execute("SELECT * FROM notes WHERE id = ?", (note_id,)).fetchone()
+        audit_mutation(
+            connection, actor=actor, domain="note", object_id=note_id,
+            action=action, before=row, after=saved,
+        )
+    return jsonify(ok=True, note=note_json(saved, identity))
 
 
 @notes_bp.delete("/api/notes/<note_id>")
 @require_profile()
 def purge_note(note_id):
+    data = request.get_json(silent=True) or {}
+    expected_version = _expected_version(data)
+    if expected_version is None:
+        return jsonify(error="Reload this note before changing it."), 400
     identity = current_device()
+    actor = actor_for_identity(identity)
     with connect(DB_PATH) as connection:
-        row = visible_note(connection, note_id, identity)
-        if not row or not row["deleted_at"]:
+        connection.execute("BEGIN IMMEDIATE")
+        row, error = _note_for_write(connection, note_id, actor)
+        if error:
+            return error
+        decision = authorize("note.purge", actor, row)
+        if not decision.allowed:
+            return jsonify(error="This shared note is read-only because you are not its owner."), 403
+        if row["version"] != expected_version:
+            return jsonify(error="This note changed elsewhere. Reload it before continuing.", conflict=True), 409
+        if not row["deleted_at"]:
             return jsonify(error="Only notes in Recently Deleted can be removed forever."), 400
-        connection.execute("DELETE FROM notes WHERE id = ?", (note_id,))
-    return jsonify(ok=True)
-
-
-def purge_expired_notes(days=30):
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
-    with connect(DB_PATH) as connection:
-        connection.execute("DELETE FROM notes WHERE deleted_at IS NOT NULL AND deleted_at < ?", (cutoff,))
+        if data.get("confirm") != "permanently delete":
+            return jsonify(error="Permanent deletion requires confirmation."), 400
+    return jsonify(
+        error="Permanent deletion is paused until a protected backup newer than this deletion is independently verified.",
+        retained=True,
+    ), 503
 
 
 def init_notes(app):

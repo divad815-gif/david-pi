@@ -1,0 +1,256 @@
+#!/usr/bin/env python3
+"""Bounded readiness gate for rollback before candidate-only worker services."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import subprocess
+import sys
+import time
+from typing import Callable
+
+
+HEALTHY_WRITERS = ("family-photo-portal", "david-pi-maintenance")
+RUNNING_WRITERS = ("david-pi-chat-notifier", "david-pi-audiobook-preparer")
+LEGACY_WRITERS = HEALTHY_WRITERS + RUNNING_WRITERS
+DISABLED_WRITERS = (
+    "david-pi-device-backup-worker",
+    "david-pi-slideshow-worker",
+)
+MAX_TIMEOUT_SECONDS = 300.0
+MAX_INTERVAL_SECONDS = 10.0
+MAX_STABLE_SAMPLES = 10
+MAX_DOCKER_OUTPUT_BYTES = 1024 * 1024
+DOCKER_ENV = {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C"}
+
+
+class ReadinessError(RuntimeError):
+    """Docker state was unavailable or malformed."""
+
+
+def _run_docker(arguments: list[str]) -> subprocess.CompletedProcess[str]:
+    try:
+        result = subprocess.run(
+            ["docker", *arguments],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+            env=DOCKER_ENV,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise ReadinessError("docker inspection unavailable") from error
+    if len(result.stdout) > MAX_DOCKER_OUTPUT_BYTES:
+        raise ReadinessError("docker inspection returned excessive data")
+    return result
+
+
+def _parse_inspect(stdout: str, expected: set[str]) -> dict[str, dict]:
+    try:
+        records = json.loads(stdout)
+    except json.JSONDecodeError as error:
+        raise ReadinessError("docker inspection returned invalid data") from error
+    if not isinstance(records, list):
+        raise ReadinessError("docker inspection returned invalid data")
+    states: dict[str, dict] = {}
+    for record in records:
+        if not isinstance(record, dict):
+            raise ReadinessError("docker inspection returned invalid data")
+        name = str(record.get("Name") or "").lstrip("/")
+        if name not in expected or name in states:
+            raise ReadinessError("docker inspection returned an unexpected writer set")
+        state = record.get("State")
+        if not isinstance(state, dict):
+            raise ReadinessError("docker inspection omitted writer state")
+        health = state.get("Health")
+        if health is not None and not isinstance(health, dict):
+            raise ReadinessError("docker inspection returned invalid health state")
+        states[name] = {
+            "container_id": record.get("Id"),
+            "running": state.get("Running") is True,
+            "paused": state.get("Paused") is True,
+            "restarting": state.get("Restarting") is True,
+            "health": (health or {}).get("Status"),
+            "started_at": state.get("StartedAt"),
+            "restart_count": record.get("RestartCount"),
+        }
+    if set(states) != expected:
+        raise ReadinessError("docker inspection omitted a required writer")
+    return states
+
+
+def inspect_rollback_state() -> tuple[dict[str, dict], dict[str, dict | None]]:
+    core_result = _run_docker(["inspect", *LEGACY_WRITERS])
+    if core_result.returncode != 0:
+        raise ReadinessError("one or more legacy writers are unavailable")
+    core = _parse_inspect(core_result.stdout, set(LEGACY_WRITERS))
+
+    disabled: dict[str, dict | None] = {}
+    for name in DISABLED_WRITERS:
+        listed = _run_docker([
+            "container", "ls", "-a", "--filter", f"name=^/{name}$",
+            "--format", "{{.Names}}",
+        ])
+        if listed.returncode != 0:
+            raise ReadinessError("disabled-writer inspection unavailable")
+        names = [line.strip() for line in listed.stdout.splitlines() if line.strip()]
+        if not names:
+            disabled[name] = None
+            continue
+        if names != [name]:
+            raise ReadinessError("docker inspection returned an ambiguous disabled writer")
+        worker_result = _run_docker(["inspect", name])
+        if worker_result.returncode != 0:
+            raise ReadinessError("disabled-writer state changed during inspection")
+        worker = _parse_inspect(worker_result.stdout, {name})
+        disabled[name] = worker[name]
+    return core, disabled
+
+
+def _identity(name: str, state: dict) -> tuple:
+    container_id = state.get("container_id")
+    started_at = state.get("started_at")
+    restart_count = state.get("restart_count")
+    if not isinstance(container_id, str) or not container_id:
+        raise ReadinessError(f"{name}:container_identity_missing")
+    if not isinstance(started_at, str) or not started_at:
+        raise ReadinessError(f"{name}:start_identity_missing")
+    if (
+        not isinstance(restart_count, int)
+        or isinstance(restart_count, bool)
+        or restart_count < 0
+    ):
+        raise ReadinessError(f"{name}:restart_count_invalid")
+    return name, container_id, started_at, restart_count
+
+
+def readiness_sample(
+    states: dict[str, dict], disabled_states: dict[str, dict | None]
+) -> tuple[bool, tuple, str]:
+    if set(states) != set(LEGACY_WRITERS):
+        return False, (), "legacy_writer_set_incomplete"
+    if set(disabled_states) != set(DISABLED_WRITERS):
+        return False, (), "disabled_writer_set_incomplete"
+    try:
+        fingerprints = []
+        for name in HEALTHY_WRITERS:
+            state = states[name]
+            if (
+                state.get("running") is not True
+                or state.get("paused") is True
+                or state.get("restarting") is True
+                or state.get("health") != "healthy"
+            ):
+                return False, (), f"{name}:health_not_healthy"
+            fingerprints.append(_identity(name, state))
+        for name in RUNNING_WRITERS:
+            state = states[name]
+            if (
+                state.get("running") is not True
+                or state.get("paused") is True
+                or state.get("restarting") is True
+            ):
+                return False, (), f"{name}:not_running"
+            fingerprints.append(_identity(name, state))
+        for name in DISABLED_WRITERS:
+            disabled_state = disabled_states[name]
+            if disabled_state is not None:
+                if (
+                    disabled_state.get("running") is True
+                    or disabled_state.get("paused") is True
+                    or disabled_state.get("restarting") is True
+                ):
+                    return False, (), f"{name}:not_stopped"
+                fingerprints.append(_identity(name, disabled_state))
+            else:
+                fingerprints.append((name, "absent"))
+    except (KeyError, TypeError, ReadinessError) as error:
+        reason = str(error) if isinstance(error, ReadinessError) else "writer_state_invalid"
+        return False, (), reason
+    return True, tuple(fingerprints), "ready"
+
+
+def wait_for_writers(
+    *,
+    timeout: float,
+    interval: float,
+    stable_samples: int,
+    inspector: Callable[[], tuple[dict[str, dict], dict | None]] = inspect_rollback_state,
+    monotonic: Callable[[], float] = time.monotonic,
+    sleeper: Callable[[float], None] = time.sleep,
+) -> tuple[bool, str]:
+    if not (0 < timeout <= MAX_TIMEOUT_SECONDS):
+        raise ValueError("timeout is outside the allowed range")
+    if not (0 < interval <= MAX_INTERVAL_SECONDS):
+        raise ValueError("interval is outside the allowed range")
+    if not (2 <= stable_samples <= MAX_STABLE_SAMPLES):
+        raise ValueError("stable-samples is outside the allowed range")
+
+    deadline = monotonic() + timeout
+    consecutive = 0
+    prior_fingerprint: tuple | None = None
+    last_reason = "not_checked"
+    while True:
+        try:
+            states, disabled_states = inspector()
+            ready, fingerprint, last_reason = readiness_sample(states, disabled_states)
+        except ReadinessError as error:
+            ready, fingerprint, last_reason = False, (), str(error)
+        except OSError:
+            ready, fingerprint, last_reason = False, (), "writer_inspection_failed"
+        if ready:
+            if fingerprint == prior_fingerprint:
+                consecutive += 1
+            else:
+                consecutive = 1
+                prior_fingerprint = fingerprint
+            if consecutive >= stable_samples:
+                return True, "ready"
+        else:
+            consecutive = 0
+            prior_fingerprint = None
+        now = monotonic()
+        if now >= deadline:
+            return False, last_reason
+        sleeper(min(interval, max(0.0, deadline - now)))
+
+
+def _bounded_float(value: str) -> float:
+    try:
+        return float(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("must be a number") from error
+
+
+def parser() -> argparse.ArgumentParser:
+    result = argparse.ArgumentParser(description=__doc__)
+    result.add_argument("--timeout", type=_bounded_float, default=90.0)
+    result.add_argument("--interval", type=_bounded_float, default=2.0)
+    result.add_argument("--stable-samples", type=int, default=3)
+    return result
+
+
+def main(argv: list[str] | None = None) -> int:
+    arguments = parser().parse_args(argv)
+    try:
+        ready, reason = wait_for_writers(
+            timeout=arguments.timeout,
+            interval=arguments.interval,
+            stable_samples=arguments.stable_samples,
+        )
+    except ValueError as error:
+        print(
+            f"david-pi-legacy-writer-readiness: invalid configuration: {error}",
+            file=sys.stderr,
+        )
+        return 2
+    if not ready:
+        print(f"david-pi-legacy-writer-readiness: failed: {reason}", file=sys.stderr)
+        return 1
+    print("david-pi-legacy-writer-readiness: ready")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

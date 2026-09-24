@@ -35,11 +35,14 @@ with connect(DB_PATH) as connection:
         [("david@example.test", "David", now, now), ("diana@example.test", "Diana", now, now)],
     )
     connection.execute(
-        "INSERT OR REPLACE INTO conversations VALUES(?,?,?,?,?,?,?,?)",
+        """INSERT OR REPLACE INTO conversations
+           (id,kind,title_cipher,title_nonce,direct_key,created_by,created_at,updated_at)
+           VALUES(?,?,?,?,?,?,?,?)""",
         ("ui-test", "direct", title_cipher, title_nonce, "david@example.test|diana@example.test", "david@example.test", now, now),
     )
     connection.executemany(
-        "INSERT OR REPLACE INTO conversation_members VALUES(?,?,?)",
+        """INSERT OR REPLACE INTO conversation_members
+           (conversation_id,owner_id,joined_at) VALUES(?,?,?)""",
         [("ui-test", "david@example.test", now), ("ui-test", "diana@example.test", now)],
     )
     connection.executemany(

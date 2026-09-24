@@ -32,7 +32,7 @@ dp_preflight() {
     failures=$((failures + 1))
   fi
   if ! dp_supported_os; then
-    echo "FAIL: supported hosts are Debian 12/13 and Ubuntu Server 22.04/24.04"
+    echo "FAIL: supported hosts are Debian 13 AMD64, Ubuntu Server 24.04 AMD64, and Raspberry Pi OS Debian 13 ARM64 (Pi 4/5)"
     failures=$((failures + 1))
   fi
   if ! command -v systemctl >/dev/null 2>&1 || [[ "$(ps -p 1 -o comm= 2>/dev/null)" != systemd ]]; then
@@ -55,14 +55,18 @@ dp_preflight() {
     echo "FAIL: DNS/Internet preflight could not resolve deb.debian.org"
     failures=$((failures + 1))
   fi
-  for port in 53 443 8081 8090; do
+  for port in 53 443 8081 8090 8091; do
     if ss -ltnH 2>/dev/null | awk '{print $4}' | grep -Eq "(^|:)$port$"; then
-      echo "WARN: TCP port $port is already in use; setup will identify the owner before continuing"
+      if [[ "$port" == 53 ]]; then
+        echo "WARN: TCP DNS port 53 is in use. Home-server setup can continue; optional Pi-hole needs a separate DNS check."
+      else
+        echo "WARN: TCP port $port is already in use; setup will identify the owner before continuing"
+      fi
       warnings=$((warnings + 1))
     fi
   done
   if ss -lunH 2>/dev/null | awk '{print $5}' | grep -Eq '(^|:)53$'; then
-    echo "WARN: UDP port 53 is already in use; Pi-hole cannot start until the owner is resolved"
+    echo "WARN: UDP DNS port 53 is in use. Home-server setup can continue; optional Pi-hole needs a separate DNS check."
     warnings=$((warnings + 1))
   fi
   if [[ -f /var/run/reboot-required ]]; then
@@ -70,7 +74,7 @@ dp_preflight() {
     warnings=$((warnings + 1))
   fi
   if [[ "$profile" == linux-laptop ]]; then
-    echo "WARN: laptop detected; setup will offer always-on lid and suspend protection"
+    echo "WARN: laptop detected; configure lid/suspend behavior explicitly in your OS for unattended hosting"
     warnings=$((warnings + 1))
   fi
   echo "Result: $failures failure(s), $warnings warning(s)"

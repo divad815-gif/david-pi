@@ -1,95 +1,164 @@
+{%- set davidpi_theme = 'dark' if request is defined and request.cookies.get('davidPiThemeV1') == 'dark' else 'light' -%}
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="{{ davidpi_theme }}">
 <head>
+  <meta name="server-name" content="{{ server_name }}">
+  <script type="application/json" id="installation-config">{{ public_installation|tojson }}</script>
+  <script src="/static/installation.js?v=2"></script>
+  <meta name="audiobook-progress-scope" content="{{ audiobook_progress_scope }}">
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="csrf-token" content="{{ csrf_token }}"><meta name="theme-color" content="#fffaf2">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=auto">
+  <meta name="csrf-token" content="{{ csrf_token }}">
+  <meta name="theme-color" content="#fffaf2">
+  <meta name="color-scheme" content="{{ davidpi_theme }}">
+  <script src="/static/theme-bootstrap.js?v=8"></script>
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-title" content="David-Pi">
-  <title>Media · David-Pi</title>
+  <meta name="apple-mobile-web-app-title" content="{{ server_name }}">
+  <title>Media · {{ server_name }}</title>
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" type="image/png" sizes="32x32" href="/david-pi-icon-32.png">
   <link rel="apple-touch-icon" sizes="180x180" href="/david-pi-icon-180.png">
-  <link rel="stylesheet" href="/static/app.css?v=31">
+  <link rel="stylesheet" href="/static/app.css?v=40">
+  <link rel="stylesheet" href="/static/media-gallery.css?v=16">
+  <link rel="stylesheet" href="/static/david-pi-ui.css?v=16">
 </head>
 <body>
-  <header class="photo-bar">
+  <header class="photo-bar media-bar">
     <a class="back" href="/" aria-label="Back home">&larr;</a>
-    <div><p>David-Pi</p><h1>Media</h1></div>
+    <div><p>{{ server_name }}</p><h1>Media</h1></div>
     <div class="photo-actions"><button class="select-button" id="toggleSelect" type="button">Select</button><button class="upload-button" id="openUpload" type="button">+ Add</button></div>
   </header>
 
   <main class="gallery-shell">
     {% if current_person.verified %}<p class="identity-note">Viewing as {{ current_person.name }}</p>{% endif %}
-    <nav class="chip-nav media-owner-tabs" id="mediaOwners" aria-label="Media ownership"><button class="selected" data-owner="">All</button><button data-owner="mine">Added by me</button></nav>
-    <section class="collections-section" aria-labelledby="collectionsTitle">
-      <div class="collections-heading"><div><p class="sheet-kicker">Albums</p><h2 id="collectionsTitle">Collections</h2></div><div class="collection-heading-actions"><button class="collection-new" id="openSlideshow" type="button">Make video</button><button class="collection-new" id="newCollection" type="button">+ New</button></div></div>
-      <div class="collection-navigator">
-        <button class="collection-nav collection-nav-left" id="previousCollection" type="button" aria-label="Previous collections">&lsaquo;</button>
-        <div class="collection-rail" id="collectionRail" aria-label="Photo collections">
-          <button class="collection-card selected" type="button" data-collection=""><span class="collection-cover all-cover" aria-hidden="true"><i></i><i></i><i></i></span><strong>All media</strong><small id="allPhotoCount">Loading&hellip;</small></button>
-          <button class="collection-card deleted-card" type="button" data-collection="deleted"><span class="collection-cover deleted-cover" aria-hidden="true"><i></i></span><strong>Recently deleted</strong><small id="deletedPhotoCount">Kept for 30 days</small></button>
-        </div>
-        <button class="collection-nav collection-nav-right" id="nextCollection" type="button" aria-label="More collections">&rsaquo;</button>
-      </div>
-      <p class="collection-hint">Tap a collection or use the arrows to open the next one.</p>
-      <label class="collection-picker"><span>Open collection</span><select id="collectionSelect"><option value="">All media</option><option value="deleted">Recently deleted</option></select></label>
-      <div class="collection-toolbar" id="collectionToolbar" hidden>
-        <strong id="selectedCollectionName"></strong>
-        <span id="allPhotoActions" hidden><button id="addFromAll" type="button">Add media</button><button id="selectFromAll" type="button">Select media</button></span>
-        <span id="deletedCollectionActions" hidden><button id="selectDeleted" type="button">Select media</button><button id="restoreAllDeleted" type="button">Restore all</button><button class="danger-text" id="emptyDeleted" type="button">Empty</button></span>
-        <span id="customCollectionActions" hidden><button id="collectionPrivacy" type="button">Only me</button><button id="renameCollection" type="button">Rename</button><button class="danger-text" id="deleteCollection" type="button">Delete collection</button></span>
-      </div>
+    <nav class="chip-nav media-owner-tabs" id="mediaOwners" aria-label="Media visibility"><button class="selected" data-owner="visible" type="button" aria-pressed="true">All visible</button><button data-owner="shared" type="button" aria-pressed="false">Shared</button><button data-owner="mine" type="button" aria-pressed="false">Added by me</button></nav>
+    <details class="media-filter-panel" id="mediaFilters">
+      <summary><strong>Filters</strong><span id="mediaFilterSummary">All types · Any date</span><span class="media-filter-chevron" aria-hidden="true">⌄</span></summary>
+      <div class="media-filter-body">
+    <section class="media-discovery" aria-label="Media type and favorite filters">
+      <nav class="media-smart-views" aria-label="Media type and favorites">
+        <span class="media-filter-label">Show</span>
+        <button class="selected" data-kind="all" type="button" aria-pressed="true">All media</button>
+        <button data-kind="photo" type="button" aria-pressed="false">Photos</button>
+        <button data-kind="video" type="button" aria-pressed="false">Videos</button>
+        <button data-favorite="true" type="button" aria-pressed="false"><span aria-hidden="true">★</span> Favorites</button>
+      </nav>
     </section>
-
     <details class="media-timeline" id="mediaTimeline">
       <summary><span><strong>Browse by date</strong><small id="timelineSummary">All years and months</small></span><span aria-hidden="true">⌄</span></summary>
       <div class="timeline-body">
         <div class="timeline-heading"><p>Jump through your library without loading every photo.</p><button id="clearTimeline" type="button">Show everything</button></div>
         <nav class="timeline-years" id="timelineYears" aria-label="Years"></nav>
         <nav class="timeline-months" id="timelineMonths" aria-label="Months"></nav>
-        <div class="gallery-density" aria-label="Media grid size"><span>Grid size</span><button type="button" data-density="comfortable" class="selected">Comfortable</button><button type="button" data-density="compact">Zoomed out</button></div>
       </div>
     </details>
+      </div>
+    </details>
+    <section class="collections-section" aria-labelledby="collectionsTitle">
+      <div class="collections-heading"><div><p class="sheet-kicker">Albums</p><h2 id="collectionsTitle">Collections</h2></div><div class="collection-heading-actions"><a class="collection-new collection-view-all" href="/photos/collections">View all</a><button class="collection-new" id="openSlideshow" type="button">Make video</button><button class="collection-new" id="newCollection" type="button">+ New</button></div></div>
+      <div class="collection-navigator">
+        <button class="collection-nav collection-nav-left" id="previousCollection" type="button" aria-label="Previous collections">&lsaquo;</button>
+      <div class="collection-rail" id="collectionRail" aria-label="Photo collections" aria-describedby="collectionRailHint">
+          <button class="collection-card selected" type="button" data-collection="" aria-current="true"><span class="collection-cover all-cover" aria-hidden="true"><i></i><i></i><i></i></span><strong>All media</strong><small id="allPhotoCount">Loading&hellip;</small></button>
+          <button class="collection-card deleted-card" type="button" data-collection="deleted"><span class="collection-cover deleted-cover" aria-hidden="true"><i></i></span><strong>Recently deleted</strong><small id="deletedPhotoCount">Restorable for 30+ days</small></button>
+        </div>
+        <button class="collection-nav collection-nav-right" id="nextCollection" type="button" aria-label="More collections">&rsaquo;</button>
+      </div>
+      <p class="collection-hint" id="collectionRailHint">Swipe the rail, tap a collection, or open the complete collection list.</p>
+      <div class="collection-toolbar" id="collectionToolbar" hidden>
+        <strong id="selectedCollectionName"></strong>
+        <span id="allPhotoActions" hidden><button id="addFromAll" type="button">Add media</button><button id="selectFromAll" type="button">Select media</button></span>
+        <span id="deletedCollectionActions" hidden><button id="selectDeleted" type="button">Select media</button><button id="restoreAllDeleted" type="button">Restore mine</button><button class="danger-text" id="emptyDeleted" type="button" disabled title="Requires verified backup and retention protection">Permanent deletion unavailable</button></span>
+        <span id="customCollectionActions" hidden><button id="collectionPrivacy" type="button">Only me</button><button id="renameCollection" type="button">Rename</button><button class="danger-text" id="deleteCollection" type="button">Delete collection</button></span>
+      </div>
+    </section>
 
+    <div class="gallery-results gallery-default-context" aria-labelledby="galleryTitle">
+      <div id="galleryContext" class="visually-hidden"><p class="sheet-kicker" id="galleryEyebrow">Library</p><h2 id="galleryTitle">All media</h2></div>
+      <div class="gallery-result-tools">
+        <div class="gallery-density" role="group" aria-label="Media grid size">
+          <button id="gridZoomOut" type="button" aria-label="Show fewer, larger thumbnails">&minus;</button>
+          <span class="gallery-density-status" role="status" aria-live="polite" aria-atomic="true">
+            <output id="gridDensityLabel">3 across</output>
+            <small id="gridDensityMode">Tap to open or select</small>
+          </span>
+          <button id="gridZoomIn" type="button" aria-label="Show more, smaller thumbnails">+</button>
+        </div>
+        <p id="galleryResultCount">Loading&hellip;</p>
+      </div>
+    </div>
     <section class="empty" id="emptyState" hidden>
       <div class="empty-art" aria-hidden="true"><span></span></div>
       <h2>Your favorite moments belong here.</h2>
       <p>Add photos and videos from your camera roll. We&rsquo;ll arrange everything by date.</p>
       <button class="big-button" type="button" data-upload>Choose media</button>
+      <button class="secondary-button" id="emptyBrowseAll" type="button" hidden>Browse all media</button>
+      <button class="secondary-button gallery-retry" id="retryGallery" type="button" hidden>Try again</button>
     </section>
-    <section class="gallery" id="gallery" aria-live="polite"></section>
-    <button class="load-more" id="loadMore" type="button" hidden>Show more</button>
+    <p class="visually-hidden" id="galleryStatus" role="status" aria-live="polite">Loading media&hellip;</p>
+    <div class="gallery-skeleton" id="gallerySkeleton" aria-hidden="true">
+      {% for _ in range(12) %}<span></span>{% endfor %}
+    </div>
+    <section class="gallery" id="gallery" aria-busy="true" aria-labelledby="galleryTitle" aria-describedby="gridDensityMode"></section>
+    <section class="gallery-page-error" id="galleryPageError" role="status" aria-live="polite" hidden>
+      <div><strong id="galleryErrorTitle">More media could not load.</strong><p id="galleryErrorCopy">Your loaded items are still available.</p></div>
+      <button class="secondary-button" id="retryGalleryPage" type="button">Try again</button>
+    </section>
+    <button class="load-more" id="loadMore" type="button" aria-controls="gallery" hidden>Show more</button>
   </main>
 
-  <div class="selection-bar" id="selectionBar" hidden>
+  <div class="selection-bar" id="selectionBar" role="toolbar" aria-label="Selected media actions" hidden>
     <strong id="selectionCount">0 selected</strong>
-    <div><button id="selectAllMedia" type="button">Select all</button><button id="selectMediaRange" type="button">Select range</button><button id="batchPrivacy" type="button">Only me</button><button id="batchShare" type="button">Share</button><button id="batchOrganize" type="button">Organize</button><button id="batchRestore" type="button" hidden>Restore</button><button class="selection-delete" id="batchDelete" type="button">Delete</button></div>
+    <div><button id="selectAllMedia" type="button">Select up to 500</button><button id="selectMediaRange" type="button">Select range</button><button id="batchPrivacy" type="button">Only me</button><button id="batchShare" type="button">Share</button><button id="batchOrganize" type="button">Organize</button><button id="batchRestore" type="button" hidden>Restore</button><button class="selection-delete" id="batchDelete" type="button">Delete</button></div>
   </div>
 
-  <dialog class="upload-sheet" id="uploadSheet">
-    <form method="dialog"><button class="close" aria-label="Close">&times;</button></form>
-    <p class="sheet-kicker">Add to your media library</p><h2>Choose photos and videos</h2>
+  <dialog class="upload-sheet" id="uploadSheet" aria-labelledby="uploadTitle">
+    <form method="dialog"><button type="submit" class="close" aria-label="Close">&times;</button></form>
+    <p class="sheet-kicker">Add to your media library</p><h2 id="uploadTitle">Choose photos and videos</h2>
     <p>Choose several at once. Originals stay untouched; videos get a phone-friendly playback copy only when needed.</p>
     <label class="picker" for="photoInput"><span class="picker-icon">+</span><strong>Choose media</strong><small>Photos plus MP4, MOV, and M4V videos</small></label>
     <input id="photoInput" type="file" name="media" accept="image/*,video/mp4,video/quicktime,.heic,.heif,.m4v" multiple hidden>
     <label class="text-field">Who can see these?<select id="mediaVisibility"><option value="shared">Shared</option><option value="private">Only me</option></select></label>
-    <div class="selection" id="selection" hidden></div><div class="upload-queue" id="uploadQueue" hidden></div><div class="progress" id="progress" hidden><span></span></div>
+    <div class="selection" id="selection" hidden></div><div class="upload-queue" id="uploadQueue" hidden></div><div class="progress" id="progress" role="progressbar" aria-label="Upload progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" hidden><span></span></div>
     <button class="big-button" id="startUpload" type="button" hidden>Upload media</button><p class="upload-message" id="uploadMessage" role="status"></p>
   </dialog>
 
-  <dialog class="viewer" id="viewer">
+  <dialog class="viewer" id="viewer" aria-label="Media viewer">
     <button class="viewer-close" id="closeViewer" type="button" aria-label="Close media">&times;</button>
     <button class="viewer-nav viewer-prev" id="previousPhoto" type="button" aria-label="Previous item">&lsaquo;</button>
     <div class="viewer-media-stage" id="viewerMediaStage">
       <img id="viewerImage" alt="">
       <video id="viewerVideo" controls playsinline preload="metadata" hidden></video>
+      <div class="viewer-zoom-controls" id="viewerZoomControls" role="group" aria-label="Image zoom">
+        <button id="viewerZoomOut" type="button" aria-label="Zoom out">&minus;</button>
+        <output id="viewerZoomLevel" aria-live="polite">100%</output>
+        <button id="viewerZoomReset" type="button">Fit</button>
+        <button id="viewerZoomIn" type="button" aria-label="Zoom in">+</button>
+      </div>
     </div>
     <button class="viewer-nav viewer-next" id="nextPhoto" type="button" aria-label="Next item">&rsaquo;</button>
-    <div class="viewer-meta"><p id="viewerName"></p><div class="viewer-actions"><button id="viewerPrivacy" type="button">Only me</button><button id="organizePhoto" type="button">Organize</button><button id="restorePhoto" type="button" hidden>Restore</button><a id="downloadOriginal">Download</a><button class="viewer-delete" id="deletePhoto" type="button">Delete</button></div></div>
+    <div class="viewer-meta" id="viewerMeta">
+      <div class="viewer-details-summary">
+        <button class="viewer-details-toggle" id="viewerCaptionToggle" type="button" aria-expanded="false" aria-controls="viewerDetails">
+          <span id="viewerCaptionToggleLabel">Add caption</span><span class="viewer-details-count" id="viewerCaptionBadge">0</span>
+        </button>
+        <p class="viewer-caption-preview" id="viewerCaptionPreview" hidden></p>
+      </div>
+      <div class="viewer-details" id="viewerDetails" hidden>
+        <p id="viewerName"></p>
+        <p class="viewer-caption-text" id="viewerCaptionText"></p>
+        <div class="viewer-caption-editor" id="viewerCaptionEditor" hidden>
+          <label for="viewerCaption">Caption</label>
+          <textarea id="viewerCaption" maxlength="1000" rows="2" placeholder="Add a caption"></textarea>
+          <div><small id="viewerCaptionCount">0 / 1,000</small><button id="saveViewerCaption" type="button">Save caption</button></div>
+          <p id="viewerCaptionStatus" role="status" aria-live="polite"></p>
+        </div>
+      </div>
+      <div class="viewer-actions"><button id="viewerFavorite" type="button" aria-pressed="false"><span aria-hidden="true">☆</span> Favorite</button><button id="viewerPrivacy" type="button">Only me</button><button id="addToMytube" type="button" hidden>Add to MyTube</button><button id="organizePhoto" type="button">Organize</button><button id="restorePhoto" type="button" hidden>Restore</button><a id="downloadOriginal">Download</a><button class="viewer-delete" id="deletePhoto" type="button">Delete</button></div>
+    </div>
   </dialog>
 
-  <dialog class="small-sheet" id="collectionEditor">
+  <dialog class="small-sheet" id="collectionEditor" aria-labelledby="collectionEditorTitle">
     <button class="close" id="closeCollectionEditor" type="button" aria-label="Close">&times;</button>
     <p class="sheet-kicker">Photo collection</p><h2 id="collectionEditorTitle">New collection</h2>
     <label class="text-field">Name<input id="collectionName" maxlength="80" autocomplete="off" placeholder="Summer vacation"></label>
@@ -98,13 +167,13 @@
   </dialog>
 
   <div class="organizer-backdrop" id="organizerBackdrop" aria-hidden="true" hidden></div>
-  <section class="small-sheet organize-sheet organizer-overlay" id="organizeSheet" role="dialog" aria-modal="true" aria-labelledby="organizeTitle" hidden>
+  <dialog class="small-sheet organize-sheet" id="organizeSheet" aria-labelledby="organizeTitle">
     <button class="close" id="closeOrganizer" type="button" aria-label="Close">&times;</button>
     <p class="sheet-kicker">Keep things together</p><h2 id="organizeTitle">Add to collections</h2>
     <p class="sheet-copy" id="organizeCopy">Choose every collection where this photo belongs.</p>
     <div class="collection-checks" id="collectionChecks">
       {% for collection in organizer_collections %}
-      <label class="collection-check server-collection-check" data-collection-id="{{ collection.id }}">
+      <label class="collection-check server-collection-check" data-collection-id="{{ collection.id }}" data-collection-version="{{ collection.version }}">
         <input type="checkbox" data-collection-id="{{ collection.id }}"><span>{{ collection.name }}</span>
       </label>
       {% else %}<p class="loading-copy">No collections yet. Create your first one below.</p>{% endfor %}
@@ -113,12 +182,12 @@
     <button class="secondary-button" id="createFromOrganize" type="button">+ Create a new collection</button>
     <div class="dialog-actions"><button class="dialog-cancel" id="cancelOrganizer" type="button">Cancel</button><button class="big-button" id="saveOrganization" type="button" disabled>Save changes</button></div>
     <p class="upload-message" id="organizeMessage" role="status"></p>
-  </section>
+  </dialog>
 
-  <dialog class="small-sheet slideshow-sheet" id="slideshowSheet">
+  <dialog class="small-sheet slideshow-sheet" id="slideshowSheet" aria-labelledby="slideshowTitle">
     <button class="close" id="closeSlideshow" type="button" aria-label="Close">&times;</button>
-    <p class="sheet-kicker">Turn moments into a movie</p><h2>Create a memory video</h2>
-    <p class="sheet-copy">David-Pi will join up to 200 photos and videos from one collection, then save the finished movie inside Videos.</p>
+    <p class="sheet-kicker">Turn moments into a movie</p><h2 id="slideshowTitle">Create a memory video</h2>
+    <p class="sheet-copy">{{ server_name }} will join up to 200 photos and videos from one collection, then save the finished movie inside Videos.</p>
     <label class="text-field">Media collection<select id="slideshowCollection"></select></label>
     <label class="text-field">Total video time<input id="slideshowDuration" type="number" min="5" max="1200" step="1" value="60" inputmode="numeric"><small>Seconds, from 5 to 1,200 (20 minutes). Source videos play in full and count toward this time.</small></label>
     <label class="text-field">Picture layout<select id="slideshowLayout">
@@ -136,22 +205,26 @@
     </label>
     <audio class="music-preview" id="slideshowMusicPreview" controls preload="none" hidden></audio>
     <p class="music-note">Music repeats to fill the movie and pauses while a source video’s own sound plays.</p>
-    <label class="slideshow-loop"><input id="slideshowLoop" type="checkbox"><span><strong>Loop-ready playback</strong><small>It repeats automatically in David-Pi. After downloading, turn on Repeat in the phone, TV, or video player.</small></span></label>
-    <div class="progress" id="slideshowProgress" hidden><span></span></div>
+    <label class="slideshow-loop"><input id="slideshowLoop" type="checkbox"><span><strong>Loop-ready playback</strong><small>It repeats automatically in {{ server_name }}. After downloading, turn on Repeat in the phone, TV, or video player.</small></span></label>
+    <div class="progress" id="slideshowProgress" role="progressbar" aria-label="Slideshow creation progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" hidden><span></span></div>
     <div class="dialog-actions"><button class="dialog-cancel" id="cancelSlideshow" type="button">Cancel</button><button class="big-button" id="createSlideshow" type="button">Create video</button></div>
     <p class="upload-message" id="slideshowMessage" role="status"></p>
   </dialog>
 
-  <dialog class="confirm-sheet" id="confirmSheet">
+  <dialog class="confirm-sheet" id="confirmSheet" aria-labelledby="confirmTitle" aria-describedby="confirmText">
     <p class="sheet-kicker" id="confirmKicker">Please confirm</p><h2 id="confirmTitle">Delete this photo?</h2>
-    <p id="confirmText">This moves the photo to Recently Deleted for 30 days.</p>
+    <p id="confirmText">This moves the photo to Recently Deleted. It remains recoverable while backup and retention protection is being verified.</p>
     <div class="confirm-actions"><button id="cancelConfirm" type="button">Cancel</button><button class="danger-button" id="acceptConfirm" type="button">Delete</button></div>
   </dialog>
 
   <div class="toast" id="photoToast" role="status" aria-live="polite" hidden></div>
 
-  <script src="/static/mobile-dialog-host.js?v=8" defer></script>
-  <script src="/static/gallery.js?v=37" defer></script>
-  <script>if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js');</script>
+  <script src="/static/david-pi-ui.js?v=15" defer></script>
+  <script src="/static/mobile-dialog-host.js?v=10" defer></script>
+  <script src="/static/slideshow-job-ui.js?v=1" defer></script>
+  <script src="/static/gallery-density-gesture.js?v=6" defer></script>
+  <script src="/static/gallery-window.js?v=5" defer></script>
+  <script src="/static/gallery.js?v=62" defer></script>
+  <script src="/static/service-worker-registration.js?v=1" defer></script>
 </body>
 </html>

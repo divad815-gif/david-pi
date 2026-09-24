@@ -4,6 +4,7 @@ import android.content.Context
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
+import com.davidpi.backup.net.DavidPiOrigin
 import java.security.KeyStore
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
@@ -11,12 +12,55 @@ import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
 class CredentialStore(context: Context) {
+    companion object { private val clearingLock = Any() }
     private val prefs = context.getSharedPreferences("paired_server", Context.MODE_PRIVATE)
     private val alias = "david_pi_backup_device_credential"
 
     var serverUrl: String?
-        get() = prefs.getString("server_url", null)
-        set(value) { prefs.edit().putString("server_url", value?.trimEnd('/')).apply() }
+        get() {
+            val raw = prefs.getString("server_url", null) ?: return null
+            return DavidPiOrigin.canonicalPairingOrigin(raw) ?: run {
+                clear()
+                null
+            }
+        }
+        set(value) {
+            if (value == null) {
+                prefs.edit().remove("server_url").apply()
+                return
+            }
+            val canonical = requireNotNull(DavidPiOrigin.canonicalPairingOrigin(value)) {
+                "Only a canonical private Tailscale HTTPS origin can be stored."
+            }
+            prefs.edit().putString("server_url", canonical).apply()
+        }
+    val instanceId: String? get() = prefs.getString("instance_id", null)
+    val memberId: String? get() = prefs.getString("member_id", null)
+    val enabledModules: Set<String> get() = prefs.getStringSet("enabled_modules", emptySet())?.toSet() ?: emptySet()
+    fun updateMetadata(identity: org.json.JSONObject) {
+        val modules = identity.optJSONArray("enabled_modules") ?: return
+        val names = (0 until modules.length()).map { modules.getString(it) }.toSet()
+        prefs.edit().putStringSet("enabled_modules", names)
+            .putString("display_name", identity.optString("display_name", "David-Pi").take(100)).apply()
+    }
+    val displayName: String get() = prefs.getString("display_name", "David-Pi") ?: "David-Pi"
+    val scope: String get() = if (instanceId != null && memberId != null)
+        HouseholdScope.key(instanceId!!, memberId!!) else "unpaired"
+
+    fun bindIdentity(instance: String, member: String, display: String) {
+        require(HouseholdScope.validIdentity(instance, member)) { "Server identity is missing or invalid." }
+        check(prefs.edit().putString("instance_id", instance).putString("member_id", member)
+            .putString("display_name", display.take(100)).commit())
+        DavidPiOrigin.approve(requireNotNull(serverUrl), scope)
+    }
+
+    fun restoreOrigin(): Boolean {
+        val server = serverUrl ?: return false
+        if (instanceId == null || memberId == null || credential() == null) return false
+        DavidPiOrigin.approve(server, scope)
+        return true
+    }
+
     var deviceId: String?
         get() = prefs.getString("device_id", null)
         set(value) { prefs.edit().putString("device_id", value).apply() }
@@ -38,6 +82,15 @@ class CredentialStore(context: Context) {
     }
 
     fun credential(): String? {
+        val storedServer = prefs.getString("server_url", null)
+        if (DavidPiOrigin.canonicalPairingOrigin(storedServer) == null) {
+            if (
+                storedServer != null ||
+                prefs.contains("credential") ||
+                prefs.contains("credential_iv")
+            ) clear()
+            return null
+        }
         val encrypted = prefs.getString("credential", null) ?: return null
         val iv = prefs.getString("credential_iv", null) ?: return null
         return runCatching {
@@ -53,8 +106,11 @@ class CredentialStore(context: Context) {
         }.getOrNull()
     }
 
-    fun clear() {
-        prefs.edit().clear().apply()
+    fun clear(expectedScope: String? = null, expectedDeviceId: String? = null) = synchronized(clearingLock) {
+        if (expectedScope != null && expectedScope != scope) return@synchronized
+        if (expectedDeviceId != null && expectedDeviceId != deviceId) return@synchronized
+        prefs.edit().clear().commit()
+        DavidPiOrigin.disconnect()
         val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
         if (store.containsAlias(alias)) store.deleteEntry(alias)
     }
@@ -71,5 +127,18 @@ class CredentialStore(context: Context) {
                 .build()
         )
         return generator.generateKey()
+    }
+}
+
+/** Installation and person identities are independent of mutable names or hostnames. */
+object HouseholdScope {
+    fun validIdentity(instance: String, member: String): Boolean =
+        runCatching { java.util.UUID.fromString(instance).toString() == instance }.getOrDefault(false) &&
+            member.isNotBlank() && member.length <= 200 && member.none { it.isISOControl() }
+    fun key(instance: String, member: String): String {
+        require(validIdentity(instance, member))
+        return java.security.MessageDigest.getInstance("SHA-256")
+            .digest("$instance\n$member".toByteArray(Charsets.UTF_8))
+            .joinToString("") { "%02x".format(it) }
     }
 }

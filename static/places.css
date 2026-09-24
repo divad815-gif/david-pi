@@ -1,0 +1,5 @@
+.marg-calendar-controls { display:flex; flex-wrap:wrap; gap:10px; align-items:end; margin-bottom:18px; }
+.marg-calendar-controls .text-field { flex:1 1 240px; margin:0; }
+#margAssignYear { margin:0 0 22px; color:var(--muted); }
+#margAssignYear summary { cursor:pointer; padding:12px 0; color:var(--ink); }
+#margConflict { padding:12px; border:1px solid var(--border); border-radius:12px; }

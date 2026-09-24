@@ -1,0 +1,29 @@
+{
+  "application_id": "com.davidpi.backup",
+  "android_build_tools_version": "35.0.0",
+  "artifact": "artifacts/android/david-pi-backup.apk",
+  "attestation": "artifacts/android/david-pi-backup.manifest.json",
+  "kind": "david-pi-android-release-policy",
+  "minimum_version_code": 27,
+  "expected_version_code": 27,
+  "expected_version_name": "1.2.0-portable-households",
+  "release_signer_certificate_sha256": "6203c903ba02db2809c400c7e26801436e2bb14d82d1b22c9caa8846bf43064d",
+  "schema_version": 1,
+  "source_build_file": "clients/android/app/build.gradle.kts",
+  "verification_tools": {
+    "aapt": {
+      "implementation_sha256": "71c9f5d2e9d6e3e1875340c20a2f6b750c2c7f54f730f5fb7f1fd1d0877c8d6f",
+      "sha256": "393c4c87f675f9555c50921fb53be1f3893cacd29f2270c4863e2e3f99583c39",
+      "version": "Android Asset Packaging Tool, v0.2-11948202"
+    },
+    "apksigner": {
+      "implementation_sha256": "00ef9948f843fe395d2440ae3ef41405b8040a6d5d46493bd1902ac0ee6deae7",
+      "runtime_sha256": "f5aed21d3a0b0f4b05d3a3f9fe71263916d5bc0d47b53aa52a3340b90f0b4805",
+      "runtime_file_count": 101,
+      "runtime_tree_sha256": "de2e0bda48aee23ca36b39cce9f3b6f4597979bc31e1dca5cc30c3a97fa7e68b",
+      "runtime_version": "openjdk version \"17.0.20.1\" 2026-08-18\nOpenJDK Runtime Environment Temurin-17.0.20.1+1 (build 17.0.20.1+1)\nOpenJDK 64-Bit Server VM Temurin-17.0.20.1+1 (build 17.0.20.1+1, mixed mode, sharing)",
+      "sha256": "b47549e373b895ce6ca620d0c7887e674d9615ffa837a86ac601dcfd04adb0f0",
+      "version": "0.9"
+    }
+  }
+}

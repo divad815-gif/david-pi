@@ -1,0 +1,17 @@
+# Source-only portal update over the exact retained production runtime.
+# No dependency/OS/base image change and no background-worker rollout.
+ARG PREVIOUS_IMAGE=david-family-photos@sha256:4331cd89c46653e3efd20a267bfbea4405f8e4d78e3e1783cb3d6e7e0a47ce6d
+FROM ${PREVIOUS_IMAGE} AS runtime
+COPY --chown=10001:10001 app.py /app/app.py
+COPY --chown=10001:10001 modules /app/modules
+COPY --chown=10001:10001 config /app/config
+COPY --chown=10001:10001 templates /app/templates
+COPY --chown=10001:10001 static /app/static
+COPY --chown=10001:10001 artifacts/android/david-pi-backup.apk /app/artifacts/android/david-pi-backup.apk
+COPY --chown=10001:10001 artifacts/android/david-pi-backup.manifest.json /app/artifacts/android/david-pi-backup.manifest.json
+ARG SOURCE_SHA256=unverified
+LABEL org.opencontainers.image.version="9.33.1-ui-fit" \
+      org.opencontainers.image.revision="${SOURCE_SHA256}"
+
+FROM runtime AS fixture-test
+COPY --chown=10001:10001 tests /app/tests

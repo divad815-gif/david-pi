@@ -1,0 +1,27 @@
+[Unit]
+Description=Recover David-Pi writers interrupted by a snapshot
+After=docker.service srv-data.mount
+Requires=docker.service
+ConditionPathExists=/var/lib/david-pi-data-backup/quiescence.json
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/david_pi_backup_quiescence.py recover
+User=root
+Group=root
+UMask=0077
+StateDirectory=david-pi-data-backup
+StateDirectoryMode=0700
+RuntimeDirectory=david-pi-writer-transition
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ReadWritePaths=/var/lib/david-pi-data-backup /run/david-pi-writer-transition
+
+[Install]
+WantedBy=multi-user.target

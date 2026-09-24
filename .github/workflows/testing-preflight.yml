@@ -1,0 +1,45 @@
+name: Testing release source preflight
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: testing-source-preflight
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    environment: testing-release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: pip
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install test prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg poppler-utils shellcheck rsync
+          pip install -r requirements.txt pytest
+      - name: Require an explicit beta source version
+        run: |
+          python -c 'import pathlib,sys; sys.path.insert(0,"scripts"); from testing_release_gate import BETA_VERSION; assert BETA_VERSION.fullmatch(pathlib.Path("VERSION").read_text().strip())'
+      - name: Screen and test source without creating downloadable artifacts
+        run: |
+          python scripts/check-public-release.py
+          python scripts/check_tracked_secrets.py
+          python -m pytest -q tests installer/tests
+          node --test tests/*.test.mjs
+          shellcheck -e SC1091,SC2034 david-pi install.sh installer/lib/*.sh scripts/*.sh deploy/*.sh
+          bash -n david-pi install.sh installer/lib/*.sh scripts/*.sh deploy/*.sh
+      - name: Explain the separate publication step
+        run: |
+          echo 'This read-only preflight does not sign, upload, or publish a beta.'
+          echo 'The reviewed local testing_release.py procedure promotes the exact tested signed APK and images.'

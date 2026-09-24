@@ -19,7 +19,7 @@ clients/android/.kotlin/
 clients/android/**/build/
 static/apk/*.apk
 dist/
-release/
+/release/
 support-bundle-*.tar.gz
 *.db
 *.db-wal
@@ -29,3 +29,11 @@ support-bundle-*.tar.gz
 *.tar.gz
 /backups/
 /data/
+
+/work/
+/build/
+/outputs/
+/artifacts/android/
+**/*.qcow2
+**/*.img
+**/*.iso

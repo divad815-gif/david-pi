@@ -1,0 +1,60 @@
+.status-history-summary {
+  margin: 18px 0 0;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.status-chart-wrap .chart-empty {
+  gap: 12px;
+  align-content: center;
+}
+
+.status-chart-wrap .chart-empty p { margin: 0; }
+.status-chart-wrap .chart-empty button {
+  min-height: var(--touch-target);
+  padding: 0 18px;
+  color: white;
+  background: var(--ink);
+  border: 0;
+  border-radius: 999px;
+  font-weight: 800;
+}
+
+.status-history-values { margin-top: 14px; }
+.status-history-values > summary {
+  min-height: var(--touch-target);
+  padding: 12px 2px;
+  color: var(--peach-dark);
+  cursor: pointer;
+  font-weight: 800;
+}
+.status-history-table-wrap { max-height: 360px; overflow: auto; border: 1px solid var(--line); border-radius: 14px; }
+
+/* State badges and measurements remain readable when system text is enlarged. */
+.metric-grid { grid-template-columns:repeat(auto-fit,minmax(min(100%,10em),1fr)); }
+.metric, .metric-top > *, .metric-foot > * { min-width:0; }
+.metric-top, .metric-foot { flex-wrap:wrap; }
+.metric-foot em { max-width:100%; line-height:1.3; }
+.health-card-heading { flex-wrap:wrap; align-items:flex-start; }
+.health-card-heading h2 { min-width:0; max-width:100%; overflow-wrap:break-word; }
+.health-state { max-width:100%; line-height:1.3; }
+.health-detail-list dt, .health-evidence { overflow-wrap:anywhere; }
+.history-filters { display:flex; flex-wrap:wrap; max-width:100%; }
+.history-filters label { flex:1 0 auto; min-width:0; }
+.history-filters select { min-width:max-content; padding-block:.55em; line-height:1.3; }
+.database-panel > summary { flex-wrap:wrap; gap:10px; }
+.database-list article > * { min-width:0; overflow-wrap:anywhere; }
+.safe-shutdown-dialog h2 { padding-right:42px; overflow-wrap:break-word; }
+@media(max-width:540px) {
+  .health-detail-list div { grid-template-columns:minmax(0,1fr); gap:5px; }
+  .health-detail-list dd { text-align:left; }
+  .history-filters label { flex-basis:100%; }
+}
+.status-history-values table { width: 100%; border-collapse: collapse; background: var(--surface); font-size: 13px; }
+.status-history-values caption { padding: 12px; color: var(--muted); text-align: left; font-weight: 800; }
+.status-history-values th,
+.status-history-values td { padding: 10px 12px; border-top: 1px solid var(--line); text-align: left; }
+.status-history-values th { position: sticky; top: 0; color: var(--ink); background: var(--paper); }
+.status-history-values td:last-child,
+.status-history-values th:last-child { text-align: right; font-variant-numeric: tabular-nums; }
