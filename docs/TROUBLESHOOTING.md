@@ -18,9 +18,12 @@ a different browser account does not change the app. On Linux,
 device as well as the server. See [account switching](TAILSCALE.md#already-using-tailscale-or-testing-in-a-separate-network).
 
 Typing an email into setup only selects the intended administrator. If you
-mistyped that address, renewing the claim code will keep the typo. Check the
-account printed in the server terminal and seek help reviewing the saved setup
-locally; do not delete configuration or keys to bypass the identity check.
+mistyped that address, renewing the claim code will keep the typo. There is
+currently no supported command to correct a saved initial claimant before
+installation. Check the account printed in the server terminal and seek support
+before continuing. `recover-admin` requires installation configuration; it is
+not a correction for the initial claim. Do not delete configuration or keys,
+edit the saved identity, or bypass its checks.
 
 A warning about DNS port 53 does not block ordinary home-server setup. Your
 operating system may already provide a local DNS service. Leave it running;
@@ -32,7 +35,12 @@ If setup requests certificates, use the Tailscale admin console's **DNS → HTTP
 Certificates → Enable HTTPS**, then finish the confirmation and verify HTTPS
 is enabled. Being on the DNS page, or merely opening the confirmation, does not
 complete this step. Return to the server and press Enter at the HTTPS
-checkpoint. If setup has exited with an error, run `sudo david-pi setup` to resume.
+checkpoint. If initial setup exits before issuing the private wizard link and
+claim code, fix the reported problem and rerun the [verified bootstrap](INSTALL.md#3-run-the-verified-bootstrap-on-the-server).
+The release details required for `sudo david-pi setup` may not exist yet. Its
+**Use a verified stable release installer** message means to return to that
+bootstrap command, not to supply your own image address. For an already issued
+claim or saved installation, use [the matching recovery stage](INSTALL.md#if-setup-stops).
 See the [Tailscale guide](TAILSCALE.md#3-enable-https-certificates).
 
 If the claim token expired before it was used, run `sudo david-pi setup` on the
@@ -45,8 +53,8 @@ unsaved browser entries may need to be entered again. The 15 minutes limits
 claiming ownership, not the full installation.
 Use the exact intended owner's Tailscale identity. The token is entered in a
 form, not appended to the address. Do not delete installation settings to fix
-an account mismatch. Once installation choices have been saved, setup resumes
-that installation instead of creating another household.
+an account mismatch. Once installation configuration has been saved, setup
+resumes an incomplete installation instead of creating another household.
 
 If renewal reports that the server's account or address changed, switch the
 server's Tailscale app back to its original account and restore its original
@@ -72,12 +80,17 @@ On a slow machine, an unchanged stage alone does not mean setup has failed.
 2. If you closed the page, reopen the private address from `sudo david-pi address`.
    Use **Check again** if offered. Do not submit another installation merely
    because progress stopped updating.
-3. Run `sudo david-pi status` on the server to inspect the saved operation and
-   its current stage. If it is still running, allow that operation to finish.
+3. After installation configuration is saved, run `sudo david-pi status` on the
+   server to inspect the saved operation and its current stage. If it is still
+   running, allow it to finish. **Installation has not been configured** can
+   appear during earlier storage preparation; retain the browser/terminal error
+   and use [the matching recovery stage](INSTALL.md#if-setup-stops).
 4. If the operation is marked failed or interrupted, read the specific error.
    Reconnect a missing disk, free sufficient space, or fix the reported account,
-   certificate or port issue. Then run `sudo david-pi setup` to resume. Your
-   saved configuration and content remain in place.
+   certificate or port issue. For a saved, incomplete installation, run
+   `sudo david-pi setup` to request repair. Follow the new job with
+   `sudo david-pi status` until it succeeds. Your saved configuration and content
+   remain in place. Earlier failures use the recovery stages linked above.
 5. When setup finishes, open the portal and confirm the chosen name and modules.
    `sudo david-pi verify` runs local checks if the page still reports a problem.
 
@@ -86,9 +99,18 @@ health checks to turn a failed installation into a success. If a supported
 machine repeatedly fails at the same stage, include that stage and error in a
 support report using the guidance below.
 
+For example, a recorded service startup or health-check timeout is a failed
+operation, even if the browser still shows the same progress stage. Use the
+saved-installation repair steps above after addressing the cause; repair does
+not extend time limits. If the failure repeats, retain its stage and error for
+support rather than repeatedly restarting or disabling checks.
+
 For developers using software-emulated VMs, startup can be much slower than
-native hardware. Keep any timing adjustment recorded as test-only evidence;
-an assisted VM recovery is not a completed native or newcomer acceptance test.
+native hardware. Current worker probes have a 20-second timeout and service
+startup waits up to 180 seconds; this test environment exceeded those limits.
+Keep any timing adjustment recorded as test-only evidence. An assisted VM
+recovery is not a completed native or newcomer acceptance test, and does not
+establish a different hardware requirement.
 
 ## Other symptoms
 

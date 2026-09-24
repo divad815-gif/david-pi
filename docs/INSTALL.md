@@ -91,8 +91,11 @@ admin console. Follow the exact [HTTPS steps](TAILSCALE.md#3-enable-https-certif
 including the certificate-name confirmation. Return to the server terminal
 and press Enter at **Press Enter after HTTPS Certificates is enabled**. The
 claim token is created after this checkpoint, so its 15-minute timer does not
-run while you are enabling certificates. If setup exited with an HTTPS error,
-run `sudo david-pi setup` to resume.
+run while you are enabling certificates. If initial setup exits before printing
+the private wizard link and claim code, correct the reported problem and rerun
+the verified bootstrap command above. The saved release details needed by
+`sudo david-pi setup` may not exist yet. If a claim code was already issued,
+follow [the recovery steps below](#if-setup-stops).
 Existing Serve conflicts are reported without replacing another private site.
 
 **Checkpoint:** Tailscale shows the server and setup device in the intended
@@ -181,8 +184,11 @@ other stages, especially on a slow machine or connection.
 
 If the page briefly says it is reconnecting, keep Tailscale connected and allow
 it to reconnect as setup hands over to the portal. Do not click Install again.
-You can inspect the saved job at any time from the server terminal with
-`sudo david-pi status`. If you close the browser, reopen your saved private
+After setup saves its installation configuration, inspect the saved job from
+the server terminal with `sudo david-pi status`. During earlier storage
+preparation, this command can report **Installation has not been configured**;
+use the browser's progress and the original terminal error at that stage.
+If you close the browser, reopen your saved private
 address. If the page says setup needs attention, follow its specific error and
 the [recovery guidance](TROUBLESHOOTING.md#setup-is-slow-disconnected-or-failed).
 
@@ -198,18 +204,35 @@ server powered on and Tailscale connected on devices accessing it.
 ## If setup stops
 
 Correct the specific disk, port, account or certificate issue before retrying.
-Run `sudo david-pi setup` on the server to resume; existing installation choices
-are preserved once saved. Before installation has begun, this command prints a
-fresh 15-minute claim token and the same private link without asking for your
-account or hostname again or reinstalling packages. It keeps your installation
-identity and replaces the old token and browser session. Refresh the wizard,
-then paste the new token. Unsaved browser form entries may need to be entered
-again. The 15 minutes is the deadline to claim, not to finish installation.
+Use the recovery step that matches how far setup reached:
+
+- **No private wizard link or claim code was issued:** rerun the
+  [verified bootstrap command](#3-run-the-verified-bootstrap-on-the-server).
+  Early package, sign-in or certificate failures can occur before verified
+  release details are saved. If `sudo david-pi setup` says **Use a verified
+  stable release installer**, return to that bootstrap command; do not invent
+  an image address or change saved state.
+- **A claim was issued, but installation configuration has not been saved:**
+  run `sudo david-pi setup`. It keeps the saved account, address and installation
+  identity and prints a fresh 15-minute token. It replaces the old token and
+  browser session without reinstalling packages. Refresh the wizard and enter
+  the new token; browser form entries may need to be entered again. If an
+  installation operation is still running, let it finish before retrying.
+- **Configuration was saved, but setup failed during service startup or
+  verification:** inspect `sudo david-pi status`, then run `sudo david-pi setup`
+  after correcting the reported problem. This requests repair of the saved
+  installation. Follow the new job with `sudo david-pi status` until it succeeds,
+  then run `sudo david-pi verify` and reopen the portal. It does not create
+  another household or extend health-check time limits.
+
+The 15 minutes is the deadline to claim, not to finish installation. Renewing a
+token keeps the selected administrator login. A mistyped initial login currently
+has no supported correction command; see [account troubleshooting](TROUBLESHOOTING.md#find-the-link-or-check-the-right-account).
 
 Renewal checks that the server still uses the saved Tailscale account and
 address. If either changed, restore the original connection before retrying;
 renewing a code does not approve moving the server. An installation already in
-progress is left running. After choices have been saved, the same command
-resumes that installation instead of creating a new claim. Refreshing an
+progress is left running. Once installation configuration has been saved, the
+same command resumes an incomplete installation instead of creating a new claim. Refreshing an
 expired token in the browser alone does not renew it. Do not delete
 configuration or storage to start over. See [troubleshooting](TROUBLESHOOTING.md).

@@ -79,12 +79,16 @@ to download a certificate or run `tailscale cert` yourself. Serve requires HTTPS
 to be enabled. [Official Serve documentation](https://tailscale.com/docs/features/tailscale-serve).
 
 Return to the **server terminal** and press Enter at the HTTPS checkpoint.
-If setup exited with an HTTPS error, run `sudo david-pi setup` again. Follow
-the private setup address it prints.
+If initial setup exits before printing the private wizard link and claim code,
+correct the HTTPS problem and rerun the [verified bootstrap command](INSTALL.md#3-run-the-verified-bootstrap-on-the-server).
+Verified release details may not have been saved yet, so `sudo david-pi setup`
+alone may refuse. If a claim code was already issued, use
+[the saved-setup recovery steps](INSTALL.md#if-setup-stops). Follow the private
+setup address printed by your server.
 This address is different from the Tailscale login and admin-console links.
 
 If the 15-minute claim code expires, run `sudo david-pi setup` in the server
-terminal. While setup is waiting to be completed, it reuses the saved account
+terminal. While a saved setup is waiting to be claimed, it reuses the saved account
 and hostname and prints the same private link with a fresh code. You do not
 repeat Tailscale sign-in or the account/name questions. The old code and browser
 session stop working, so refresh the wizard before pasting the new code.

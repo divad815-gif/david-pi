@@ -4,11 +4,26 @@ Updates start deliberately from an admitted administrator’s portal controls.
 No new preview images are offered. The installer accepts only the supported
 stable release metadata and verifies downloaded source/image identities.
 
+Open **Settings → Updates → Check for updates**. If a newer stable release is
+available, choose **Install verified update** and follow the displayed job.
+
 Before applying an update, it checks compatibility and space, coordinates
 application writes, captures consistent databases/configuration/secrets/job
 state, and retains the previous image and configuration. Jobs persist with
 visible progress, so closing the browser must not turn success into a guess.
 After migrations, readiness checks must pass before normal writes resume.
+
+**Current storage limitation:** the update snapshot copies the entire
+application data directory into local management state, normally on the
+operating-system disk. That disk currently needs free space for a full copy of
+the library and other application data, plus a 1 GiB reserve. A large library
+on an external drive can therefore block updates even when that drive has ample
+space. Selecting an independent backup destination does not redirect these
+update snapshots. This storage design remains an open release limitation; do
+not move management state manually to bypass it. Configuration and keys are
+also copied, and retained earlier snapshots use additional space on that disk.
+There is currently no supported snapshot-location setting. This limitation
+must be resolved before stable publication.
 
 Follow the recorded job state instead of assuming that a closed browser means
 the update finished:
@@ -25,8 +40,10 @@ flowchart TD
 ```
 
 Do not power off intentionally during an update. If power or connectivity fails,
-reopen administrator settings or inspect the local management CLI. Review the
-persisted stage and recovery instructions before retrying. A missing backup
+reopen administrator settings or run `sudo david-pi status` in the server's
+terminal. Review the persisted stage and [recovery instructions](RECOVERY.md)
+before retrying. `repair` recreates selected services; it is not an automatic
+rollback command. A missing backup
 destination does not block everyday use, but insufficient space for the local
 pre-update snapshot must block the update.
 

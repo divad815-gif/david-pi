@@ -26,14 +26,36 @@ with a file manager and assume it is a complete recoverable installation.
 
 ## Restore rehearsal
 
-1. Use a clean disposable machine/VM with separate empty test storage.
+### Prepare the clean target
+
+The replacement machine needs a compatible verified David-Pi release and local
+management command, Docker and Compose, Tailscale, the shipped service files,
+and a running management helper. It must be connected to the intended Tailscale
+network with [private HTTPS enabled](TAILSCALE.md), with the backup and a separate
+empty application destination mounted on [supported local ext4 storage](STORAGE.md).
+The target must have no existing household installation configuration. Restore
+correctly refuses to overwrite one; do not remove configuration to bypass it.
+
+**A complete newcomer procedure for preparing this clean target has not yet
+been validated or documented.** Current clean-restore testing supplied those
+prerequisites separately. The commands below verify restore mechanics once the
+target is prepared; they are not a complete recovery bootstrap. Completing the
+ordinary installation wizard first creates a household configuration and is
+not a substitute for the missing target-preparation procedure. This remains an
+open [release acceptance requirement](RELEASE.md).
+
+### Restore and verify content on a prepared target
+
+1. Use a clean disposable machine/VM meeting the prerequisites above, with
+   separate empty test storage.
 2. Keep the original server and backup unchanged. Use only synthetic fixtures
    for public test evidence; never publish real household records.
 3. On the original server, `sudo david-pi restore-test` verifies snapshot
    hashes and database integrity. This does **not** prove a clean restore.
    On the clean target use `sudo david-pi restore --snapshot SNAPSHOT_DIRECTORY
    --data-root EMPTY_DIRECTORY`, with explicit absolute paths, then
-   `sudo david-pi repair` and `sudo david-pi verify`.
+   `sudo david-pi repair`. Follow the requested repair job with
+   `sudo david-pi status` until it succeeds, then run `sudo david-pi verify`.
 4. Confirm member permissions, several file hashes, media playback, saved notes,
    recipes, watchlist and encrypted chat content from that recovery point.
 5. Check that disabled modules’ data and keys were preserved and that Android
@@ -53,6 +75,18 @@ routine backups are skipped. This protects against a failed update on that
 machine; it does not protect against disk failure. An incompatible migration
 cannot be undone by switching images alone. Automatic recovery must never
 replace newer household activity with older content. See [updates](UPDATES.md).
+
+Currently, these update snapshots copy the entire application data directory
+into management state on the operating-system disk. The destination must have
+free space for that full content copy plus a 1 GiB reserve. A separate primary
+data drive or independent backup drive does not change this location. Large
+libraries can therefore exhaust the space available for updates; this remains
+an open storage-design limitation. Do not relocate management state manually
+or delete unknown recovery files to get past the check.
+Configuration and keys are copied too, and each retained earlier snapshot
+continues to use space on the same disk. There is currently no supported
+snapshot-location setting; this limitation must be resolved before stable
+publication.
 
 To remove the running application, use the server terminal:
 
