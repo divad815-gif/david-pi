@@ -78,6 +78,14 @@ def test_oci_screen_rejects_private_content_without_echoing_it(tmp_path):
     assert marker.decode() not in str(error.value)
 
 
+def test_generated_home_marker_matches_actual_paths_without_prefix_collisions(tmp_path, monkeypatch):
+    monkeypatch.setattr(artifacts.Path, "home", lambda: Path("/home/fixture"))
+    markers = artifacts.private_markers(None, tmp_path)
+    artifacts.screen_stream(io.BytesIO(b"/mnt/home/fixture-pi-data"), markers)
+    with pytest.raises(artifacts.ReleaseError, match="Private marker"):
+        artifacts.screen_stream(io.BytesIO(b"/home/fixture/private-build/tool"), markers)
+
+
 @pytest.mark.parametrize("field", ["config", "layers"])
 def test_pushed_image_must_match_tested_manifest_content(tmp_path, field):
     path, manifest, _ = oci_fixture(tmp_path)

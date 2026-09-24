@@ -47,7 +47,9 @@ def verify_source_archive(path, version, files):
 
 def private_markers(path, root):
     # These values stay in memory. Receipts contain only counts, never the text.
-    values = [str(root).encode(), str(Path.home()).encode()]
+    # Include the separator: a username prefix alone also matches neutral
+    # fixture names such as /mnt/home/david-pi-data.
+    values = [str(root).encode(), (str(Path.home()) + "/").encode()]
     if path:
         values += [line.strip().encode() for line in path.read_text().splitlines() if line.strip()]
     return list(set(values))
